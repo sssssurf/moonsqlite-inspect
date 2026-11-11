@@ -1,4 +1,4 @@
-"""Measure the built CLI on deterministic WAL and backup workloads."""
+"""Measure the built CLI on WAL, backup comparison and point lookup workloads."""
 
 import argparse
 from contextlib import closing
@@ -58,13 +58,15 @@ def sample(cli, preload, command):
     return milliseconds, int(process.stderr), report
 
 
-def measure(clis, preload, command, runs):
-    samples = {name: [] for name, _ in clis}
+def measure(cases, preload, runs, *, rowid=None):
+    samples = {name: [] for name, _, _ in cases}
     expected = None
     for trial in range(runs):
-        order = clis if trial % 2 == 0 else reversed(clis)
-        for name, cli in order:
+        order = cases if trial % 2 == 0 else reversed(cases)
+        for name, cli, command in order:
             milliseconds, max_rss_kib, report = sample(cli, preload, command)
+            if rowid is not None and command[0] == "table":
+                report["entries"] = [row for row in report["entries"] if row["rowid"] == rowid]
             if expected is None:
                 expected = report
             assert report == expected, "CLI outputs differ on the benchmark fixture"
@@ -99,17 +101,25 @@ def main():
         preload = directory / "memory.cjs"
         preload.write_text("process.on('exit', () => console.error(process.resourceUsage().maxRSS));\n", encoding="utf-8")
         wal_command, wal_bytes = make_wal(directory)
-        wal, catalog = measure(clis, preload, wal_command, options.runs)
+        wal, catalog = measure([(name, cli, wal_command) for name, cli in clis], preload, options.runs)
         assert catalog["wal_frames_applied"] >= WAL_COMMITS and catalog["wal_tail_bytes"] == 0
         diff_command, backup_bytes = make_backups(directory)
-        diff, report = measure(clis, preload, diff_command, options.runs)
+        diff, report = measure([(name, cli, diff_command) for name, cli in clis], preload, options.runs)
         assert [(entry["kind"], entry["after"]["rowid"]) for entry in report["entries"]] == [("changed", "4000")]
+        current = clis[-1][1]
+        backup = directory / "before.sqlite"
+        lookup, report = measure([
+            ("table_then_filter", current, ["table", backup, "items"]),
+            ("row", current, ["row", backup, "items", "4000"]),
+        ], preload, options.runs, rowid="4000")
+        assert [entry["rowid"] for entry in report["entries"]] == ["4000"]
     print(json.dumps({
         "node": subprocess.check_output(["node", "--version"], text=True).strip(),
         "sqlite": sqlite3.sqlite_version,
         "runs_per_cli": options.runs,
         "wal": {"commits": WAL_COMMITS, "bytes": wal_bytes, "results": wal},
         "diff": {"rows_per_snapshot": BACKUP_ROWS, "input_bytes": backup_bytes, "results": diff},
+        "lookup": {"rows": BACKUP_ROWS, "rowid": "4000", "results": lookup},
     }, indent=2))
 
 

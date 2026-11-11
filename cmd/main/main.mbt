@@ -43,6 +43,47 @@ fn load(path : String) -> Bytes raise CliError {
 }
 
 ///|
+fn load_snapshot(path : String, wal_path : String?) -> @inspect.Snapshot raise {
+  let main = load(path)
+  let wal = match wal_path {
+    None => None
+    Some(path) => Some(load(path))
+  }
+  @inspect.open_snapshot(main, wal?)
+}
+
+///|
+fn wal_option(options : ArrayView[String]) -> String? raise CliError {
+  match options {
+    [] => None
+    ["--wal", path] => Some(path)
+    _ => raise CliError("Expected an optional --wal WAL argument")
+  }
+}
+
+///|
+fn parse_rowid(value : String) -> Int64 raise CliError {
+  @string.parse_int64(value, base=10) catch {
+    _ =>
+      raise CliError(
+        "Expected a signed 64-bit decimal rowid, got \{Json(value).stringify()}",
+      )
+  }
+}
+
+///|
+fn parse_limit(value : String) -> Int32 raise CliError {
+  let limit = @string.parse_int(value, base=10) catch {
+    _ =>
+      raise CliError(
+        "Expected a positive 32-bit decimal row limit, got \{Json(value).stringify()}",
+      )
+  }
+  guard limit > 0 else { raise CliError("The row limit must be positive") }
+  limit
+}
+
+///|
 fn value_json(value : @inspect.Value) -> Json {
   match value {
     Null => { "type": "null" }
@@ -60,6 +101,21 @@ fn row_json(row : @inspect.Row) -> Json {
     "page": row.page,
     "cell_offset": row.cell_offset,
     "values": row.values.map(value_json),
+  }
+}
+
+///|
+fn snapshot_fields(
+  snapshot : @inspect.Snapshot,
+  entries : Json,
+) -> Map[String, Json] {
+  {
+    "page_size": Json(snapshot.page_size),
+    "page_count": Json(snapshot.page_count),
+    "text_encoding": Json(snapshot.text_encoding()),
+    "wal_frames_applied": Json(snapshot.wal_frames_applied),
+    "wal_tail_bytes": Json(snapshot.wal_tail_bytes),
+    "entries": entries,
   }
 }
 
@@ -103,6 +159,28 @@ fn run(args : ArrayView[String]) -> Json raise {
       name,
     )
   }
+  if args is ["row", path, name, key, .. options] {
+    let rowid = parse_rowid(key)
+    let snapshot = load_snapshot(path, wal_option(options))
+    let entries : Array[Json] = match snapshot.find_row(name, rowid) {
+      Some(row) => [row_json(row)]
+      None => []
+    }
+    return Json(snapshot_fields(snapshot, Json(entries)))
+  }
+  if args is ["range", path, name, first, last, limit, .. options] {
+    let first = parse_rowid(first)
+    let last = parse_rowid(last)
+    let limit = parse_limit(limit)
+    let snapshot = load_snapshot(path, wal_option(options))
+    let page = snapshot.scan_rowid_range(name, first, last, limit~)
+    let fields = snapshot_fields(snapshot, Json(page.rows.map(row_json)))
+    fields["next_rowid"] = match page.next_rowid {
+      Some(rowid) => Json(rowid.to_string())
+      None => Json::null()
+    }
+    return Json(fields)
+  }
   let (command, db_path, name, wal_path) = match args {
     ["catalog", path] => ("catalog", path, "", None)
     ["catalog", path, "--wal", wal] => ("catalog", path, "", Some(wal))
@@ -113,15 +191,10 @@ fn run(args : ArrayView[String]) -> Json raise {
       (command, path, name, Some(wal))
     _ =>
       raise CliError(
-        "Usage: moonsqlite-inspect catalog DB [--wal WAL] | (table|index) DB NAME [--wal WAL] | diff BEFORE AFTER NAME | wal-diff DB NAME --wal WAL",
+        "Usage: moonsqlite-inspect catalog DB [--wal WAL] | (table|index) DB NAME [--wal WAL] | row DB NAME ROWID [--wal WAL] | range DB NAME FIRST LAST LIMIT [--wal WAL] | diff BEFORE AFTER NAME | wal-diff DB NAME --wal WAL",
       )
   }
-  let main = load(db_path)
-  let wal = match wal_path {
-    None => None
-    Some(path) => Some(load(path))
-  }
-  let snapshot = @inspect.open_snapshot(main, wal?)
+  let snapshot = load_snapshot(db_path, wal_path)
   let entries : Json = match command {
     "catalog" =>
       Json(
@@ -155,14 +228,7 @@ fn run(args : ArrayView[String]) -> Json raise {
         }),
       )
   }
-  {
-    "page_size": snapshot.page_size,
-    "page_count": snapshot.page_count,
-    "text_encoding": snapshot.text_encoding(),
-    "wal_frames_applied": snapshot.wal_frames_applied,
-    "wal_tail_bytes": snapshot.wal_tail_bytes,
-    "entries": entries,
-  }
+  Json(snapshot_fields(snapshot, entries))
 }
 
 ///|

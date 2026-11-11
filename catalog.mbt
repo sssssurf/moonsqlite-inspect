@@ -42,6 +42,47 @@ pub fn Snapshot::scan_table(
 }
 
 ///|
+/// Find a stored record by its signed rowid. A missing row returns None.
+pub fn Snapshot::find_row(
+  self : Snapshot,
+  name : String,
+  rowid : Int64,
+) -> Row? raise InspectError {
+  let root = self.table_entry(name).root_page
+  self.table_cursor(root, range={ first: rowid, last: rowid, }).next()
+}
+
+///|
+pub struct RowidPage {
+  rows : Array[Row]
+  next_rowid : Int64?
+}
+
+///|
+/// Read up to limit records from an inclusive rowid range in ascending order.
+/// Pass next_rowid as the next call's first bound to continue, when present.
+pub fn Snapshot::scan_rowid_range(
+  self : Snapshot,
+  name : String,
+  first : Int64,
+  last : Int64,
+  limit~ : Int32,
+) -> RowidPage raise InspectError {
+  guard first <= last else {
+    raise Invalid("the first rowid must be at most the last rowid")
+  }
+  guard limit > 0 else { raise Invalid("the row limit must be positive") }
+  let root = self.table_entry(name).root_page
+  let cursor = self.table_cursor(root, range={ first, last, })
+  let rows = []
+  while rows.length() < limit {
+    guard cursor.next() is Some(row) else { return { rows, next_rowid: None, } }
+    rows.push(row)
+  }
+  { rows, next_rowid: cursor.peek_rowid(), }
+}
+
+///|
 fn Snapshot::table_entry(
   self : Snapshot,
   name : String,

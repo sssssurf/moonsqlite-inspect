@@ -46,6 +46,11 @@ pub(all) enum RowChange {
   Changed(Row, Row)
 }
 
+pub struct RowidPage {
+  rows : Array[Row]
+  next_rowid : Int64?
+}
+
 pub struct Snapshot {
   page_size : Int32
   page_count : Int32
@@ -55,9 +60,11 @@ pub struct Snapshot {
   // private fields
 }
 pub fn Snapshot::catalog(Self) -> Array[CatalogEntry] raise InspectError
+pub fn Snapshot::find_row(Self, String, Int64) -> Row? raise InspectError
 pub fn Snapshot::scan_index(Self, String) -> Array[IndexRecord] raise InspectError
 pub fn Snapshot::scan_index_root(Self, Int32) -> Array[IndexRecord] raise InspectError
 pub fn Snapshot::scan_root(Self, Int32) -> Array[Row] raise InspectError
+pub fn Snapshot::scan_rowid_range(Self, String, Int64, Int64, limit~ : Int32) -> RowidPage raise InspectError
 pub fn Snapshot::scan_table(Self, String) -> Array[Row] raise InspectError
 pub fn Snapshot::text_encoding(Self) -> String
 

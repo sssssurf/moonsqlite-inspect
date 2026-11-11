@@ -1,6 +1,7 @@
 import {
   "sssssurf/moonsqlite-inspect" @inspect,
   "moonbitlang/core/env",
+  "moonbitlang/core/string",
   "moonbitlang/core/encoding/hex",
 }
 

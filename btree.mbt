@@ -194,9 +194,30 @@ fn TableBranch::contains(self : TableBranch, rowid : Int64) -> Bool {
 }
 
 ///|
+fn TableBranch::check_rowid(
+  self : TableBranch,
+  rowid : Int64,
+  previous : Int64?,
+) -> Unit raise InspectError {
+  guard self.contains(rowid) else {
+    raise Invalid("rowid is outside its B-tree range on page \{self.page}")
+  }
+  if previous is Some(last) && rowid <= last {
+    raise Invalid("table rowids are out of order on page \{self.page}")
+  }
+}
+
+///|
+priv struct RowidRange {
+  first : Int64
+  last : Int64
+}
+
+///|
 priv struct TableLeaf {
   branch : TableBranch
   tree : BtreePage
+  end_slot : Int32
   mut next_slot : Int32
 }
 
@@ -205,19 +226,36 @@ priv struct TableCursor {
   snapshot : Snapshot
   seen : Map[Int32, Bool]
   stack : Array[TableBranch]
+  range : RowidRange?
   mut leaf : TableLeaf?
   mut previous : Int64?
 }
 
 ///|
-fn Snapshot::table_cursor(self : Snapshot, root : Int32) -> TableCursor {
+fn Snapshot::table_cursor(
+  self : Snapshot,
+  root : Int32,
+  range? : RowidRange,
+) -> TableCursor {
   {
     snapshot: self,
     seen: Map([]),
     stack: [{ page: root, depth: 0, lower: None, upper: None, }],
+    range,
     leaf: None,
     previous: None,
   }
+}
+
+///|
+fn TableCursor::push_branch(self : TableCursor, branch : TableBranch) -> Unit {
+  if self.range is Some(range) {
+    if (branch.upper is Some(upper) && upper < range.first) ||
+      (branch.lower is Some(lower) && lower >= range.last) {
+      return
+    }
+  }
+  self.stack.push(branch)
 }
 
 ///|
@@ -238,7 +276,7 @@ fn TableCursor::push_children(
       !(i > 0 && upper is Some(next) && rowid >= next) else {
       raise Invalid("invalid rowid separator on page \{branch.page}")
     }
-    self.stack.push({
+    self.push_branch({
       page: child,
       depth: branch.depth + 1,
       lower: Some(rowid),
@@ -251,7 +289,7 @@ fn TableCursor::push_children(
     )
     upper = Some(rowid)
   }
-  self.stack.push({
+  self.push_branch({
     page: child,
     depth: branch.depth + 1,
     lower: branch.lower,
@@ -260,43 +298,47 @@ fn TableCursor::push_children(
 }
 
 ///|
-fn TableCursor::next(self : TableCursor) -> Row? raise InspectError {
+fn table_cell_header(
+  cell : BytesView,
+) -> (Int64, UInt64, Int32) raise InspectError {
+  let (length, rowid_start) = varint(cell, 0)
+  let (bits, payload) = varint(cell, rowid_start)
+  (bits.reinterpret_as_int64(), length, payload)
+}
+
+///|
+fn TableCursor::open_leaf(
+  self : TableCursor,
+  branch : TableBranch,
+  tree : BtreePage,
+) -> TableLeaf raise InspectError {
+  guard self.range is Some(range) else {
+    return { branch, tree, next_slot: 0, end_slot: tree.cells.length(), }
+  }
+  let mut next_slot = 0
+  let mut end_slot = 0
+  let mut previous = None
+  // Validate the order before pruning slots on this page. A damaged key must
+  // not hide a later matching record just because it looks past the range.
+  for index, slot in tree.cells {
+    let (rowid, _, _) = table_cell_header(tree.bytes[slot.offset:slot.end])
+    branch.check_rowid(rowid, previous)
+    previous = Some(rowid)
+    if rowid < range.first {
+      next_slot = index + 1
+    }
+    if rowid <= range.last {
+      end_slot = index + 1
+    }
+  }
+  { branch, tree, next_slot, end_slot, }
+}
+
+///|
+fn TableCursor::next_leaf(self : TableCursor) -> TableLeaf? raise InspectError {
   while true {
-    if self.leaf is Some(leaf) && leaf.next_slot < leaf.tree.cells.length() {
-      let slot = leaf.tree.cells[leaf.next_slot]
-      let cell = leaf.tree.bytes[slot.offset:slot.end]
-      let (length, rowid_start) = varint(cell, 0)
-      let (bits, payload) = varint(cell, rowid_start)
-      let rowid = bits.reinterpret_as_int64()
-      guard leaf.branch.contains(rowid) else {
-        raise Invalid(
-          "rowid is outside its B-tree range on page \{leaf.branch.page}",
-        )
-      }
-      if self.previous is Some(last) && rowid <= last {
-        raise Invalid("table rowids are out of order")
-      }
-      let values = self.snapshot.record_payload(
-        cell,
-        payload,
-        length,
-        self.snapshot.usable_size - 35,
-        self.seen,
-      ) catch {
-        Invalid(message) =>
-          raise Invalid(
-            "page \{leaf.branch.page}, cell \{slot.offset}: \{message}",
-          )
-        error => raise error
-      }
-      leaf.next_slot += 1
-      self.previous = Some(rowid)
-      return Some({
-        rowid,
-        page: leaf.branch.page,
-        cell_offset: slot.offset,
-        values,
-      })
+    if self.leaf is Some(leaf) && leaf.next_slot < leaf.end_slot {
+      return Some(leaf)
     }
     self.leaf = None
     guard self.stack.pop() is Some(branch) else { break }
@@ -308,10 +350,42 @@ fn TableCursor::next(self : TableCursor) -> Row? raise InspectError {
     if tree.right is Some(right) {
       self.push_children(branch, tree, right)
     } else {
-      self.leaf = Some({ branch, tree, next_slot: 0, })
+      self.leaf = Some(self.open_leaf(branch, tree))
     }
   }
   None
+}
+
+///|
+fn TableCursor::peek_rowid(self : TableCursor) -> Int64? raise InspectError {
+  guard self.next_leaf() is Some(leaf) else { return None }
+  let slot = leaf.tree.cells[leaf.next_slot]
+  let (rowid, _, _) = table_cell_header(leaf.tree.bytes[slot.offset:slot.end])
+  leaf.branch.check_rowid(rowid, self.previous)
+  Some(rowid)
+}
+
+///|
+fn TableCursor::next(self : TableCursor) -> Row? raise InspectError {
+  guard self.next_leaf() is Some(leaf) else { return None }
+  let slot = leaf.tree.cells[leaf.next_slot]
+  let cell = leaf.tree.bytes[slot.offset:slot.end]
+  let (rowid, length, payload) = table_cell_header(cell)
+  leaf.branch.check_rowid(rowid, self.previous)
+  let values = self.snapshot.record_payload(
+    cell,
+    payload,
+    length,
+    self.snapshot.usable_size - 35,
+    self.seen,
+  ) catch {
+    Invalid(message) =>
+      raise Invalid("page \{leaf.branch.page}, cell \{slot.offset}: \{message}")
+    error => raise error
+  }
+  leaf.next_slot += 1
+  self.previous = Some(rowid)
+  Some({ rowid, page: leaf.branch.page, cell_offset: slot.offset, values, })
 }
 
 ///|

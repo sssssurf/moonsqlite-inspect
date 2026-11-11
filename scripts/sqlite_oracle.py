@@ -151,6 +151,76 @@ def check_cell_boundaries(directory):
     changed.write_bytes(overlap)
     run("table", changed, "packed", error="record payload extends beyond its B-tree cell")
     run("diff", database, changed, "packed", error="record payload extends beyond its B-tree cell")
+    damaged_rowid = original[start + 1]
+    good_rowid = 3 - damaged_rowid
+    good_value = b"\xaa" if good_rowid == 1 else b"\xbb"
+    check_rows(run("row", changed, "packed", str(good_rowid)), [(good_rowid, good_value)])
+    run("row", changed, "packed", str(damaged_rowid), error="record payload extends beyond its B-tree cell")
+    if good_rowid < damaged_rowid:
+        first_page = run("range", changed, "packed", str(good_rowid), str(damaged_rowid), "1")
+        check_rows(first_page, [(good_rowid, good_value)])
+        assert first_page["next_rowid"] == str(damaged_rowid)
+
+    out_of_order = bytearray(original)
+    out_of_order[start + 1] = good_rowid
+    changed.write_bytes(out_of_order)
+    run("row", changed, "packed", str(good_rowid), error="table rowids are out of order")
+
+
+def check_rowid_lookup(directory):
+    database = directory / "lookup.sqlite"
+    lowest, highest = -(2**63), 2**63 - 1
+    beyond_js_integer = 2**53 + 1
+    keys = [lowest, *range(-1200, 1200, 2), beyond_js_integer, highest]
+    with closing(sqlite3.connect(database)) as db:
+        db.executescript("""
+            PRAGMA page_size=512;
+            CREATE TABLE items(payload);
+            CREATE TABLE empty(payload);
+            CREATE TABLE compact(id PRIMARY KEY) WITHOUT ROWID;
+        """)
+        db.executemany("INSERT INTO items(rowid, payload) VALUES (?, ?)", [
+            (key, bytes(range(256)) * 12 if key == 0 else ("记录" * 25 + str(key))) for key in keys
+        ])
+        db.commit()
+        for key in (lowest, -1200, -2, 0, 998, beyond_js_integer, highest, -1, 1, highest - 1):
+            expected = db.execute("SELECT rowid, payload FROM items WHERE rowid=?", (key,)).fetchall()
+            check_rows(run("row", database, "items", str(key)), expected)
+        for first, last, limit in ((-13, 23, 4), (lowest, -1192, 2), (highest, highest, 1), (1201, 1300, 3)):
+            expected = db.execute("SELECT rowid, payload FROM items WHERE rowid BETWEEN ? AND ? ORDER BY rowid",
+                                  (first, last)).fetchall()
+            for start in range(0, max(1, len(expected)), limit):
+                report = run("range", database, "items", str(first), str(last), str(limit))
+                check_rows(report, expected[start:start + limit])
+                next_index = start + limit
+                next_key = expected[next_index][0] if next_index < len(expected) else None
+                assert report["next_rowid"] == (None if next_key is None else str(next_key)), report
+                if next_key is not None:
+                    first = int(report["next_rowid"])
+        root_page = db.execute("SELECT rootpage FROM sqlite_schema WHERE name='items'").fetchone()[0]
+
+    assert run("row", database, "empty", "1")["entries"] == []
+    run("row", database, "compact", "1", error="not a rowid-table")
+    run("row", database, "missing", "1", error="NotFound")
+    run("row", database, "items", str(highest + 1), error="64-bit decimal rowid")
+    run("row", database, "items", str(lowest - 1), error="64-bit decimal rowid")
+    run("range", database, "items", "1", "0", "1", error="first rowid must be at most")
+    run("range", database, "items", "0", "1", "0", error="row limit must be positive")
+
+    raw = bytearray(database.read_bytes())
+    root = (root_page - 1) * 512
+    first_cell = root + int.from_bytes(raw[root + 12:root + 14], "big")
+    left_child = int.from_bytes(raw[first_cell:first_cell + 4], "big")
+    assert raw[root] == 5 and raw[(left_child - 1) * 512] == 5, "lookup fixture needs multiple interior levels"
+    low_record = run("row", database, "items", str(lowest))["entries"][0]
+    high_record = run("row", database, "items", str(highest))["entries"][0]
+    assert low_record["page"] != high_record["page"]
+    raw[(high_record["page"] - 1) * 512] = 0
+    damaged = directory / "unrelated-page.sqlite"
+    damaged.write_bytes(raw)
+    assert run("row", damaged, "items", str(lowest))["entries"] == [low_record]
+    run("row", damaged, "items", str(highest), error="not a rowid-table")
+    run("table", damaged, "items", error="not a rowid-table")
 
 
 def wal_capture(directory):
@@ -189,6 +259,11 @@ def wal_capture(directory):
     report = run("table", capture, "samples", "--wal", log)
     check_rows(report, expected)
     check_rows(run("table", capture, "wal_only", "--wal", log), [(1, "created in WAL")])
+    check_rows(run("row", capture, "samples", "2"), [])
+    check_rows(run("row", capture, "samples", "2", "--wal", log), [expected[1]])
+    first_page = run("range", capture, "samples", "1", "10", "1", "--wal", log)
+    check_rows(first_page, [expected[0]])
+    assert first_page["next_rowid"] == "2"
     assert report["wal_frames_applied"] == (len(committed) - 32) // (512 + 24)
     assert report["wal_tail_bytes"] == len(log_bytes) - len(committed)
     changes = run("wal-diff", capture, "samples", "--wal", log)["entries"]
@@ -262,10 +337,11 @@ def main():
     with temp:
         total = main_images(directory)
         check_cell_boundaries(directory)
+        check_rowid_lookup(directory)
         wal_capture(directory)
         wal_resize(directory)
         compare_backups(directory)
-    print(f"SQLite {sqlite3.sqlite_version}: {total} records matched across 3 page sizes and 3 encodings; page boundaries, WAL and backup diff cases passed")
+    print(f"SQLite {sqlite3.sqlite_version}: {total} records matched across 3 page sizes and 3 encodings; rowid lookup, pagination, page boundaries, WAL and backup diff cases passed")
 
 
 if __name__ == "__main__":
