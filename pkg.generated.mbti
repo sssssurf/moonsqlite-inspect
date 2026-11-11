@@ -59,6 +59,7 @@ pub fn Snapshot::scan_index(Self, String) -> Array[IndexRecord] raise InspectErr
 pub fn Snapshot::scan_index_root(Self, Int32) -> Array[IndexRecord] raise InspectError
 pub fn Snapshot::scan_root(Self, Int32) -> Array[Row] raise InspectError
 pub fn Snapshot::scan_table(Self, String) -> Array[Row] raise InspectError
+pub fn Snapshot::text_encoding(Self) -> String
 
 pub(all) enum Value {
   Null

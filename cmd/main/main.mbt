@@ -49,13 +49,7 @@ fn value_json(value : @inspect.Value) -> Json {
     Integer(number) => { "type": "integer", "value": number.to_string() }
     Real(number) => { "type": "real", "value": number.to_string() }
     Text(text) => { "type": "text", "value": text }
-    Blob(bytes) => {
-      let hex = StringBuilder()
-      for byte in bytes {
-        hex.write_string(byte.to_hex())
-      }
-      { "type": "blob", "value": hex.to_string() }
-    }
+    Blob(bytes) => { "type": "blob", "value": @hex.encode(bytes[:]) }
   }
 }
 
@@ -164,6 +158,7 @@ fn run(args : ArrayView[String]) -> Json raise {
   {
     "page_size": snapshot.page_size,
     "page_count": snapshot.page_count,
+    "text_encoding": snapshot.text_encoding(),
     "wal_frames_applied": snapshot.wal_frames_applied,
     "wal_tail_bytes": snapshot.wal_tail_bytes,
     "entries": entries,

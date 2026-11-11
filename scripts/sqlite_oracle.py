@@ -1,6 +1,7 @@
 """Generate offline SQLite captures and compare the MoonBit CLI with SQLite."""
 
 from contextlib import closing
+from itertools import product
 import json
 from pathlib import Path
 import sqlite3
@@ -15,7 +16,7 @@ CLI = ROOT / "_build/js/debug/build/cmd/main/main.js"
 def run(*args, error=None):
     process = subprocess.run(["node", CLI, *args], capture_output=True, encoding="utf-8")
     if error is not None:
-        assert process.returncode == 2 and error in process.stderr, (args, process)
+        assert process.returncode == 2 and error in process.stderr and not process.stdout, (args, process)
         return None
     assert process.returncode == 0, (args, process.stderr)
     return json.loads(process.stdout)
@@ -49,10 +50,11 @@ def check_rows(report, expected):
 
 def main_images(directory):
     total = 0
-    for page_size in (512, 4096, 65536):
-        db_path = directory / f"page-{page_size}.sqlite"
+    for page_size, encoding in product((512, 4096, 65536), ("UTF-8", "UTF-16le", "UTF-16be")):
+        db_path = directory / f"page-{page_size}-{encoding}.sqlite"
         with closing(sqlite3.connect(db_path)) as db:
             db.execute(f"PRAGMA page_size={page_size}")
+            db.execute(f"PRAGMA encoding='{encoding}'")
             db.executescript("""
                 CREATE TABLE samples(id INTEGER PRIMARY KEY, label TEXT, n INTEGER, r REAL, payload BLOB);
                 CREATE INDEX samples_n ON samples(n);
@@ -80,6 +82,7 @@ def main_images(directory):
             compact = db.execute("SELECT group_id, id, note FROM compact ORDER BY group_id, id").fetchall()
         report = run("table", db_path, "samples")
         assert report["page_size"] == page_size
+        assert report["text_encoding"] == encoding
         check_rows(report, rows)
         entries = run("catalog", db_path)["entries"]
         assert [(e["kind"], e["name"], e["table"], e["root_page"], e["sql"]) for e in entries] == catalog
@@ -90,7 +93,7 @@ def main_images(directory):
             entries = run("index", db_path, name)["entries"]
             assert [tuple(decoded(field) for field in e["values"]) for e in entries] == expected
         total += len(rows) + len(indexed) + len(compact)
-        if page_size == 512:
+        if page_size == 512 and encoding == "UTF-8":
             bad_path = directory / "bad-pointer.sqlite"
             image = bytearray(db_path.read_bytes())
             root_page = next(entry[3] for entry in catalog if entry[1] == "samples")
@@ -99,10 +102,55 @@ def main_images(directory):
             image[root + 12:root + 14] = b"\0\0"
             bad_path.write_bytes(image)
             run("table", bad_path, "samples", error="invalid B-tree cell offset")
+            image = bytearray(db_path.read_bytes())
+            first_cell = root + int.from_bytes(image[root + 12:root + 14], "big")
+            assert 0 < image[first_cell + 4] < 128, "fixture should have a positive one-byte separator"
+            image[first_cell + 4] = 0
+            bad_path.write_bytes(image)
+            run("table", bad_path, "samples", error="rowid is outside its B-tree range")
     invalid = directory / "truncated.sqlite"
     invalid.write_bytes(db_path.read_bytes()[:-1])
     run("catalog", invalid, error="incomplete main image")
     return total
+
+
+def check_cell_boundaries(directory):
+    database = directory / "cell-layout.sqlite"
+    changed = directory / "damaged-layout.sqlite"
+    with closing(sqlite3.connect(database)) as db:
+        db.executescript("""
+            PRAGMA page_size=512;
+            CREATE TABLE packed(data);
+            INSERT INTO packed VALUES (X'AA'), (X'BB');
+            CREATE TABLE fragmented(data);
+        """)
+        db.executemany("INSERT INTO fragmented VALUES (?)", [("a" * 20 + str(i),) for i in range(12)])
+        db.execute("DELETE FROM fragmented WHERE rowid IN (3, 7, 11)")
+        db.commit()
+        expected = db.execute("SELECT rowid, data FROM fragmented ORDER BY rowid").fetchall()
+        roots = dict(db.execute("SELECT name, rootpage FROM sqlite_schema"))
+
+    check_rows(run("table", database, "fragmented"), expected)
+    original = database.read_bytes()
+    page = (roots["fragmented"] - 1) * 512
+    first_free = int.from_bytes(original[page + 1:page + 3], "big")
+    assert original[page] == 13 and first_free > 0, "fixture should have an on-page freeblock"
+    loop = bytearray(original)
+    loop[page + first_free:page + first_free + 2] = first_free.to_bytes(2, "big")
+    changed.write_bytes(loop)
+    run("table", changed, "fragmented", error="invalid freeblock offset")
+
+    page = (roots["packed"] - 1) * 512
+    first, following = sorted(int.from_bytes(original[page + slot:page + slot + 2], "big") for slot in (8, 10))
+    overlap = bytearray(original)
+    start = page + first
+    length = following - first - 1
+    assert overlap[start] == 3 and overlap[start + 2] == 2 and 3 < length < 60
+    overlap[start] = length
+    overlap[start + 3] = 12 + 2 * (length - 2)
+    changed.write_bytes(overlap)
+    run("table", changed, "packed", error="record payload extends beyond its B-tree cell")
+    run("diff", database, changed, "packed", error="record payload extends beyond its B-tree cell")
 
 
 def wal_capture(directory):
@@ -159,6 +207,31 @@ def wal_capture(directory):
     run("table", capture, "samples", "--wal", log, error="invalid WAL header checksum")
 
 
+def wal_resize(directory):
+    live = directory / "resizing.sqlite"
+    main = directory / "resizing-capture.sqlite"
+    wal = directory / "resizing-capture.wal"
+    with closing(sqlite3.connect(live)) as db:
+        db.executescript("PRAGMA page_size=512; PRAGMA auto_vacuum=FULL;")
+        assert db.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        db.executescript("PRAGMA wal_autocheckpoint=0; CREATE TABLE samples(value TEXT);")
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        main.write_bytes(live.read_bytes())
+        counts = []
+        for command in (
+            "WITH RECURSIVE r(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM r WHERE i<50) INSERT INTO samples SELECT printf('%0400d',i) FROM r;",
+            "DELETE FROM samples WHERE rowid>2;",
+            "WITH RECURSIVE r(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM r WHERE i<20) INSERT INTO samples SELECT printf('%0400d',i+100) FROM r;",
+        ):
+            db.executescript(command)
+            counts.append(db.execute("PRAGMA page_count").fetchone()[0])
+            wal.write_bytes(live.with_name(live.name + "-wal").read_bytes())
+            report = run("table", main, "samples", "--wal", wal)
+            assert report["page_count"] == counts[-1]
+            check_rows(report, db.execute("SELECT rowid, value FROM samples ORDER BY rowid").fetchall())
+        assert counts[0] > counts[1] and counts[1] < counts[2], counts
+
+
 def compare_backups(directory):
     before = directory / "before.sqlite"
     after = directory / "after.sqlite"
@@ -188,9 +261,11 @@ def main():
         raise RuntimeError("unexpected test directory")
     with temp:
         total = main_images(directory)
+        check_cell_boundaries(directory)
         wal_capture(directory)
+        wal_resize(directory)
         compare_backups(directory)
-    print(f"SQLite {sqlite3.sqlite_version}: {total} records across 3 page sizes matched; WAL and backup diff cases passed")
+    print(f"SQLite {sqlite3.sqlite_version}: {total} records matched across 3 page sizes and 3 encodings; page boundaries, WAL and backup diff cases passed")
 
 
 if __name__ == "__main__":

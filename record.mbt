@@ -14,6 +14,29 @@ pub extend Value with Eq::{equal, not_equal}
 pub extend Value with @debug.Debug::{to_repr}
 
 ///|
+priv enum TextEncoding {
+  Utf8
+  Utf16Le
+  Utf16Be
+}
+
+///|
+fn TextEncoding::decode(
+  self : TextEncoding,
+  field : BytesView,
+) -> String raise InspectError {
+  try {
+    match self {
+      Utf8 => @utf8.decode(field)
+      Utf16Le => @utf16.decode(field, endianness=Little)
+      Utf16Be => @utf16.decode(field, endianness=Big)
+    }
+  } catch {
+    _ => raise Invalid("malformed text in a SQLite record")
+  }
+}
+
+///|
 fn serial_size(serial : UInt64, maximum : Int32) -> Int32 raise InspectError {
   match serial {
     0UL | 8UL | 9UL => 0
@@ -29,7 +52,10 @@ fn serial_size(serial : UInt64, maximum : Int32) -> Int32 raise InspectError {
 }
 
 ///|
-fn read_record(payload : BytesView) -> Array[Value] raise InspectError {
+fn read_record(
+  payload : BytesView,
+  encoding~ : TextEncoding = Utf8,
+) -> Array[Value] raise InspectError {
   let (header_size, first) = varint(payload, 0)
   let end = bounded(header_size, payload.length(), "record header size")
   guard end >= first else { raise Invalid("record header overlaps its length") }
@@ -53,12 +79,7 @@ fn read_record(payload : BytesView) -> Array[Value] raise InspectError {
         Integer((word(field, 0, size) << shift).reinterpret_as_int64() >> shift)
       }
       _ if (serial & 1UL) == 0UL => Blob(field.to_owned())
-      _ =>
-        Text(
-          @utf8.decode(field) catch {
-            _ => raise Invalid("malformed UTF-8 record text")
-          },
-        )
+      _ => Text(encoding.decode(field))
     }
     values.push(value)
     body += size

@@ -2,11 +2,22 @@
 pub struct Snapshot {
   priv main : Bytes
   priv overlay : Map[Int32, BytesView]
+  priv encoding : TextEncoding
   page_size : Int32
   page_count : Int32
   usable_size : Int32
   wal_frames_applied : Int32
   wal_tail_bytes : Int32
+}
+
+///|
+/// Return the text encoding used to decode records from this snapshot.
+pub fn Snapshot::text_encoding(self : Snapshot) -> String {
+  match self.encoding {
+    Utf8 => "UTF-8"
+    Utf16Le => "UTF-16le"
+    Utf16Be => "UTF-16be"
+  }
 }
 
 ///|
@@ -66,9 +77,12 @@ pub fn open_snapshot(main : Bytes, wal? : Bytes) -> Snapshot raise InspectError 
   guard header[:16] == data[:16] && word(header, 16, 2) == raw_size.to_uint64() else {
     raise Invalid("effective page 1 is inconsistent with the main header")
   }
-  let encoding = word(header, 56, 4)
-  guard encoding == 1UL || (encoding == 0UL && word(header, 44, 4) == 0UL) else {
-    raise Unsupported("this reader supports UTF-8 database text")
+  let encoding = match word(header, 56, 4) {
+    1UL => Utf8
+    2UL => Utf16Le
+    3UL => Utf16Be
+    0UL if word(header, 44, 4) == 0UL => Utf8
+    _ => raise Unsupported("unknown SQLite text encoding")
   }
   let usable_size = page_size - word(header, 20, 1).to_int()
   guard usable_size >= 480 && word(header, 21, 3) == 0x402020UL else {
@@ -77,6 +91,7 @@ pub fn open_snapshot(main : Bytes, wal? : Bytes) -> Snapshot raise InspectError 
   {
     main,
     overlay: wal.pages,
+    encoding,
     page_size,
     page_count,
     usable_size,

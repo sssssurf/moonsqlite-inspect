@@ -17,33 +17,33 @@ pub fn diff_table(
   guard before_entry.sql is Some(old_sql) && after_entry.sql == Some(old_sql) else {
     raise Unsupported("table definitions differ between snapshots")
   }
-  let old = before.scan_root(before_entry.root_page)
-  let new = after.scan_root(after_entry.root_page)
+  let old = before.table_cursor(before_entry.root_page)
+  let new = after.table_cursor(after_entry.root_page)
   let changes = []
-  let mut i = 0
-  let mut j = 0
-  while i < old.length() && j < new.length() {
-    let left = old[i]
-    let right = new[j]
+  let mut old_row = old.next()
+  let mut new_row = new.next()
+  while (old_row, new_row) is (Some(left), Some(right)) {
     if left.rowid < right.rowid {
       changes.push(Removed(left))
-      i += 1
+      old_row = old.next()
     } else if left.rowid > right.rowid {
       changes.push(Added(right))
-      j += 1
+      new_row = new.next()
     } else {
       if left.values != right.values {
         changes.push(Changed(left, right))
       }
-      i += 1
-      j += 1
+      old_row = old.next()
+      new_row = new.next()
     }
   }
-  for index in i..<old.length() {
-    changes.push(Removed(old[index]))
+  while old_row is Some(row) {
+    changes.push(Removed(row))
+    old_row = old.next()
   }
-  for index in j..<new.length() {
-    changes.push(Added(new[index]))
+  while new_row is Some(row) {
+    changes.push(Added(row))
+    new_row = new.next()
   }
   changes
 }

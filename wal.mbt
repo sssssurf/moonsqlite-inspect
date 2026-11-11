@@ -86,9 +86,13 @@ fn read_wal(data : BytesView, page_size : Int32) -> Wal raise InspectError {
     let size = word(frame, 4, 4)
     if size != 0UL {
       let count = bounded(size, 0x7fffffff, "WAL commit page count")
-      let obsolete = pages.keys().filter(fn(key) { key > count }).to_array()
-      for key in obsolete {
-        pages.remove(key)
+      // Every cached page fits the previous commit's size. Only truncation can
+      // invalidate one, so growing logs need no scan of the existing pages.
+      if page_count is Some(previous) && count < previous {
+        let obsolete = pages.keys().filter(fn(key) { key > count }).to_array()
+        for key in obsolete {
+          pages.remove(key)
+        }
       }
       for key, value in pending {
         if key <= count {

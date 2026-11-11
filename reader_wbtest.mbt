@@ -32,6 +32,22 @@ test "a reserved serial type is rejected" {
 }
 
 ///|
+test "UTF-16 record text preserves its leading BOM and supplementary characters" {
+  let little = b"\x02\x1d\xff\xfe\x2d\x4e\x3d\xd8\x00\xde"
+  let big = b"\x02\x1d\xfe\xff\x4e\x2d\xd8\x3d\xde\x00"
+  assert_eq(read_record(little[:], encoding=Utf16Le), [Text("\uFEFF中😀")])
+  assert_eq(read_record(big[:], encoding=Utf16Be), [Text("\uFEFF中😀")])
+  let rejected = try {
+    ignore(read_record(b"\x02\x0f\x00"[:], encoding=Utf16Le))
+    false
+  } catch {
+    Invalid(message) => message == "malformed text in a SQLite record"
+    _ => false
+  }
+  assert_true(rejected)
+}
+
+///|
 test "WAL checksums interpret each word according to the magic byte order" {
   let bytes = b"\x01\x00\x00\x00\x02\x00\x00\x00"
   assert_eq(wal_checksum(bytes[:], false, (0U, 0U)), (1U, 3U))
