@@ -1,0 +1,8 @@
+import {
+  "sssssurf/moonsqlite-inspect" @inspect,
+  "moonbitlang/core/env",
+}
+
+supported_targets = "js"
+
+pkgtype(kind: "executable")
