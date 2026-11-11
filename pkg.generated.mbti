@@ -1,0 +1,76 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "sssssurf/moonsqlite-inspect"
+
+import {
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn diff_table(Snapshot, Snapshot, String) -> Array[RowChange] raise InspectError
+
+pub fn open_snapshot(Bytes, wal? : Bytes) -> Snapshot raise InspectError
+
+// Errors
+pub suberror InspectError {
+  Invalid(String)
+  Unsupported(String)
+  NotFound(String)
+} derive(@debug.Debug)
+pub fn InspectError::to_repr(Self) -> @debug.Repr
+
+// Types and methods
+pub struct CatalogEntry {
+  kind : String
+  name : String
+  table : String
+  root_page : Int32
+  sql : String?
+}
+
+pub struct IndexRecord {
+  page : Int32
+  cell_offset : Int32
+  values : Array[Value]
+}
+
+pub struct Row {
+  rowid : Int64
+  page : Int32
+  cell_offset : Int32
+  values : Array[Value]
+}
+
+pub(all) enum RowChange {
+  Added(Row)
+  Removed(Row)
+  Changed(Row, Row)
+}
+
+pub struct Snapshot {
+  page_size : Int32
+  page_count : Int32
+  usable_size : Int32
+  wal_frames_applied : Int32
+  wal_tail_bytes : Int32
+  // private fields
+}
+pub fn Snapshot::catalog(Self) -> Array[CatalogEntry] raise InspectError
+pub fn Snapshot::scan_index(Self, String) -> Array[IndexRecord] raise InspectError
+pub fn Snapshot::scan_index_root(Self, Int32) -> Array[IndexRecord] raise InspectError
+pub fn Snapshot::scan_root(Self, Int32) -> Array[Row] raise InspectError
+pub fn Snapshot::scan_table(Self, String) -> Array[Row] raise InspectError
+
+pub(all) enum Value {
+  Null
+  Integer(Int64)
+  Real(Double)
+  Text(String)
+  Blob(Bytes)
+} derive(Eq, @debug.Debug)
+pub fn Value::equal(Self, Self) -> Bool
+pub fn Value::not_equal(Self, Self) -> Bool
+pub fn Value::to_repr(Self) -> @debug.Repr
+
+// Type aliases
+
+// Traits
