@@ -6,9 +6,13 @@ import {
 }
 
 // Values
+pub fn diff_revisions(WalRevision, WalRevision, String) -> Array[VersionedChange] raise InspectError
+
 pub fn diff_table(Snapshot, Snapshot, String) -> Array[RowChange] raise InspectError
 
 pub fn open_snapshot(Bytes, wal? : Bytes) -> Snapshot raise InspectError
+
+pub fn open_wal_timeline(Bytes, Bytes, max_frames? : Int32) -> WalTimeline raise InspectError
 
 // Errors
 pub suberror InspectError {
@@ -31,6 +35,11 @@ pub struct IndexRecord {
   page : Int32
   cell_offset : Int32
   values : Array[Value]
+}
+
+pub(all) enum PageOrigin {
+  MainPage(Int64)
+  WalFrame(WalPageOrigin)
 }
 
 pub struct Row {
@@ -78,6 +87,49 @@ pub(all) enum Value {
 pub fn Value::equal(Self, Self) -> Bool
 pub fn Value::not_equal(Self, Self) -> Bool
 pub fn Value::to_repr(Self) -> @debug.Repr
+
+pub(all) enum VersionedChange {
+  Added(VersionedRow)
+  Removed(VersionedRow)
+  Changed(VersionedRow, VersionedRow)
+}
+
+pub(all) struct VersionedRow {
+  row : Row
+  origin : PageOrigin
+}
+
+pub(all) struct WalCommit {
+  revision : Int32
+  first_frame : Int32
+  last_frame : Int32
+  page_count : Int32
+}
+
+pub(all) struct WalPageOrigin {
+  frame : Int32
+  revision : Int32
+  offset : Int64
+}
+
+pub struct WalRevision {
+  info : WalCommit
+  // private fields
+}
+pub fn WalRevision::page_origin(Self, Int32) -> PageOrigin raise InspectError
+pub fn WalRevision::scan_table(Self, String) -> Array[VersionedRow] raise InspectError
+
+pub struct WalTimeline {
+  page_size : Int32
+  valid_frames : Int32
+  committed_frames : Int32
+  ignored_wal_bytes : Int32
+  stop_offset : Int64
+  stop_reason : String
+  // private fields
+}
+pub fn WalTimeline::commits(Self) -> Array[WalCommit]
+pub fn WalTimeline::snapshot(Self, Int32) -> WalRevision raise InspectError
 
 // Type aliases
 

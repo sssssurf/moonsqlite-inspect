@@ -26,9 +26,9 @@ def make_wal(directory):
         assert db.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
         db.executescript("PRAGMA synchronous=OFF; PRAGMA wal_autocheckpoint=0; CREATE TABLE items(payload);")
         db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        shutil.copyfile(active, main)
         db.executemany("INSERT INTO items VALUES (zeroblob(400))", [()] * WAL_COMMITS)
         assert db.execute("SELECT count(*) FROM items").fetchone() == (WAL_COMMITS,)
-        shutil.copyfile(active, main)
         shutil.copyfile(active.with_name(active.name + "-wal"), wal)
     return ["catalog", main, "--wal", wal], wal.stat().st_size
 
@@ -84,6 +84,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cli", type=Path, default=ROOT / "_build/js/debug/build/cmd/main/main.js")
     parser.add_argument("--baseline", type=Path, help="Compiled CLI from an earlier version")
+    parser.add_argument("--history", action="store_true", help="Also measure indexing all WAL revisions")
     parser.add_argument("--runs", type=int, default=5)
     options = parser.parse_args()
     if options.runs < 1:
@@ -103,24 +104,32 @@ def main():
         wal_command, wal_bytes = make_wal(directory)
         wal, catalog = measure([(name, cli, wal_command) for name, cli in clis], preload, options.runs)
         assert catalog["wal_frames_applied"] >= WAL_COMMITS and catalog["wal_tail_bytes"] == 0
+        current = clis[-1][1]
+        history = None
+        if options.history:
+            _, main, _, log = wal_command
+            history, report = measure([("current", current, ["wal-history", main, log])], preload, options.runs)
+            assert len(report["commits"]) == WAL_COMMITS + 1 and report["ignored_wal_bytes"] == 0
         diff_command, backup_bytes = make_backups(directory)
         diff, report = measure([(name, cli, diff_command) for name, cli in clis], preload, options.runs)
         assert [(entry["kind"], entry["after"]["rowid"]) for entry in report["entries"]] == [("changed", "4000")]
-        current = clis[-1][1]
         backup = directory / "before.sqlite"
         lookup, report = measure([
             ("table_then_filter", current, ["table", backup, "items"]),
             ("row", current, ["row", backup, "items", "4000"]),
         ], preload, options.runs, rowid="4000")
         assert [entry["rowid"] for entry in report["entries"]] == ["4000"]
-    print(json.dumps({
+    results = {
         "node": subprocess.check_output(["node", "--version"], text=True).strip(),
         "sqlite": sqlite3.sqlite_version,
         "runs_per_cli": options.runs,
         "wal": {"commits": WAL_COMMITS, "bytes": wal_bytes, "results": wal},
         "diff": {"rows_per_snapshot": BACKUP_ROWS, "input_bytes": backup_bytes, "results": diff},
         "lookup": {"rows": BACKUP_ROWS, "rowid": "4000", "results": lookup},
-    }, indent=2))
+    }
+    if history is not None:
+        results["history"] = {"commits": WAL_COMMITS, "bytes": wal_bytes, "results": history}
+    print(json.dumps(results, indent=2))
 
 
 if __name__ == "__main__":

@@ -95,13 +95,18 @@ fn value_json(value : @inspect.Value) -> Json {
 }
 
 ///|
-fn row_json(row : @inspect.Row) -> Json {
+fn row_fields(row : @inspect.Row) -> Map[String, Json] {
   {
-    "rowid": row.rowid.to_string(),
-    "page": row.page,
-    "cell_offset": row.cell_offset,
-    "values": row.values.map(value_json),
+    "rowid": Json(row.rowid.to_string()),
+    "page": Json(row.page),
+    "cell_offset": Json(row.cell_offset),
+    "values": Json(row.values.map(value_json)),
   }
+}
+
+///|
+fn row_json(row : @inspect.Row) -> Json {
+  Json(row_fields(row))
 }
 
 ///|
@@ -144,6 +149,24 @@ fn diff_json(
 
 ///|
 fn run(args : ArrayView[String]) -> Json raise {
+  if args is ["wal-history", base, wal] {
+    return history_json(@inspect.open_wal_timeline(load(base), load(wal)))
+  }
+  if args is ["wal-rows", base, wal, revision, name] {
+    let number = parse_revision(revision)
+    let timeline = @inspect.open_wal_timeline(load(base), load(wal))
+    let snapshot = timeline.snapshot(number)
+    return {
+      "revision": commit_json(snapshot.info),
+      "entries": snapshot.scan_table(name).map(versioned_row_json),
+    }
+  }
+  if args is ["wal-changes", base, wal, before, after, name] {
+    let from = parse_revision(before)
+    let to = parse_revision(after)
+    let timeline = @inspect.open_wal_timeline(load(base), load(wal))
+    return changes_json(timeline.snapshot(from), timeline.snapshot(to), name)
+  }
   if args is ["diff", before, after, name] {
     return diff_json(
       @inspect.open_snapshot(load(before)),
@@ -189,10 +212,20 @@ fn run(args : ArrayView[String]) -> Json raise {
     ["table" as command, path, name, "--wal", wal]
     | ["index" as command, path, name, "--wal", wal] =>
       (command, path, name, Some(wal))
-    _ =>
-      raise CliError(
-        "Usage: moonsqlite-inspect catalog DB [--wal WAL] | (table|index) DB NAME [--wal WAL] | row DB NAME ROWID [--wal WAL] | range DB NAME FIRST LAST LIMIT [--wal WAL] | diff BEFORE AFTER NAME | wal-diff DB NAME --wal WAL",
-      )
+    _ => {
+      let usage =
+        #| Usage: moonsqlite-inspect COMMAND
+        #|   wal-history BASE WAL
+        #|   wal-rows BASE WAL REVISION TABLE
+        #|   wal-changes BASE WAL FROM TO TABLE
+        #|   catalog DB [--wal WAL]
+        #|   (table|index) DB NAME [--wal WAL]
+        #|   row DB NAME ROWID [--wal WAL]
+        #|   range DB NAME FIRST LAST LIMIT [--wal WAL]
+        #|   diff BEFORE AFTER NAME
+        #|   wal-diff DB NAME --wal WAL
+      raise CliError(usage)
+    }
   }
   let snapshot = load_snapshot(db_path, wal_path)
   let entries : Json = match command {

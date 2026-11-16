@@ -8,6 +8,8 @@ import sqlite3
 import subprocess
 import tempfile
 
+from wal_demo import HIGH_ROWID, WAL_PAGE_SIZE, make_capture
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "_build/js/debug/build/cmd/main/main.js"
@@ -238,6 +240,7 @@ def wal_capture(directory):
         db.execute("UPDATE samples SET value='committed edit'")
         db.commit()
         earlier = wal_path.read_bytes()
+        db.execute("BEGIN")
         db.execute("CREATE TABLE wal_only(value TEXT)")
         db.execute("INSERT INTO wal_only VALUES ('created in WAL')")
         db.execute("INSERT INTO samples VALUES ('committed insert')")
@@ -266,20 +269,33 @@ def wal_capture(directory):
     assert first_page["next_rowid"] == "2"
     assert report["wal_frames_applied"] == (len(committed) - 32) // (512 + 24)
     assert report["wal_tail_bytes"] == len(log_bytes) - len(committed)
+    history = run("wal-history", capture, log)
+    assert history["stop_reason"] == "end_of_file"
+    assert history["valid_frames"] > history["committed_frames"]
+    assert history["ignored_wal_bytes"] == len(log_bytes) - len(committed)
+    assert len(history["commits"]) == 3
+    run("wal-rows", capture, log, "3", "samples", error="revision 3 does not exist")
     changes = run("wal-diff", capture, "samples", "--wal", log)["entries"]
     assert [(c["kind"], c["after"]["rowid"]) for c in changes] == [("changed", "1"), ("added", "2")]
     log.write_bytes(committed + b"partial frame")
     truncated = run("table", capture, "samples", "--wal", log)
     check_rows(truncated, expected)
     assert truncated["wal_tail_bytes"] == len(b"partial frame")
+    history = run("wal-history", capture, log)
+    assert history["stop_reason"] == "truncated_frame"
+    assert int(history["stop_offset"]) == len(committed)
     damaged = bytearray(committed)
     damaged[len(earlier) + 24] ^= 1
     log.write_bytes(damaged)
     prefix = run("table", capture, "samples", "--wal", log)
     check_rows(prefix, [(1, "committed edit")])
     assert prefix["wal_tail_bytes"] == len(committed) - len(earlier)
+    history = run("wal-history", capture, log)
+    assert history["stop_reason"] == "checksum_mismatch"
+    assert int(history["stop_offset"]) == len(earlier)
+    assert len(history["commits"]) == 2
     log.write_bytes(committed[:24] + bytes([committed[24] ^ 1]) + committed[25:])
-    run("table", capture, "samples", "--wal", log, error="invalid WAL header checksum")
+    run("table", capture, "samples", "--wal", log, error="WAL header checksum")
 
 
 def wal_resize(directory):
@@ -293,6 +309,7 @@ def wal_resize(directory):
         db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
         main.write_bytes(live.read_bytes())
         counts = []
+        expected = [db.execute("SELECT rowid, value FROM samples ORDER BY rowid").fetchall()]
         for command in (
             "WITH RECURSIVE r(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM r WHERE i<50) INSERT INTO samples SELECT printf('%0400d',i) FROM r;",
             "DELETE FROM samples WHERE rowid>2;",
@@ -303,8 +320,113 @@ def wal_resize(directory):
             wal.write_bytes(live.with_name(live.name + "-wal").read_bytes())
             report = run("table", main, "samples", "--wal", wal)
             assert report["page_count"] == counts[-1]
-            check_rows(report, db.execute("SELECT rowid, value FROM samples ORDER BY rowid").fetchall())
+            expected.append(db.execute("SELECT rowid, value FROM samples ORDER BY rowid").fetchall())
+            check_rows(report, expected[-1])
         assert counts[0] > counts[1] and counts[1] < counts[2], counts
+    for revision in range(1, 4):
+        report = run("wal-rows", main, wal, str(revision), "samples")
+        assert report["revision"]["page_count"] == counts[revision - 1]
+        check_rows({**report, "page_size": 512, "page_count": counts[revision - 1]}, expected[revision])
+
+
+def read_varint(data, offset):
+    value = 0
+    for i in range(9):
+        byte = data[offset + i]
+        if i == 8:
+            return (value << 8) | byte, offset + 9
+        value = (value << 7) | (byte & 0x7f)
+        if byte < 0x80:
+            return value, offset + i + 1
+
+
+def check_origins(rows, baseline_bytes, wal_bytes, last_frame, page_size):
+    """Independently replay unmodified SQLite frame headers and inspect raw cells."""
+    frames = {}
+    frame_size = page_size + 24
+    revision = 1
+    for number in range(1, last_frame + 1):
+        offset = 32 + (number - 1) * frame_size
+        page = int.from_bytes(wal_bytes[offset:offset + 4], "big")
+        db_pages = int.from_bytes(wal_bytes[offset + 4:offset + 8], "big")
+        frames[page] = dict(kind="wal", frame=number, revision=revision, page_offset=str(offset + 24))
+        if db_pages:
+            frames = {key: value for key, value in frames.items() if key <= db_pages}
+            revision += 1
+    for row in rows:
+        page = row["page"]
+        expected = frames.get(page, dict(kind="main", page_offset=str((page - 1) * page_size)))
+        assert row["source"] == expected
+        raw = baseline_bytes if expected["kind"] == "main" else wal_bytes
+        offset = int(expected["page_offset"])
+        cell = row["cell_offset"]
+        image = raw[offset:offset + page_size]
+        header = 100 if page == 1 else 0
+        assert image[header] == 13
+        size = int.from_bytes(image[header + 3:header + 5], "big")
+        pointers = range(header + 8, header + 8 + size * 2, 2)
+        assert any(int.from_bytes(image[start:start + 2], "big") == cell for start in pointers)
+        _, key_offset = read_varint(image, cell)
+        key, _ = read_varint(image, key_offset)
+        assert int(row["rowid"]) == (key if key < 2**63 else key - 2**64)
+
+
+def compare_history(directory):
+    demo = directory / "history"
+    expected_rows, page_counts, wal_lengths = make_capture(demo)
+    baseline, wal = demo / "baseline.sqlite", demo / "capture.wal"
+    baseline_bytes, wal_bytes = baseline.read_bytes(), wal.read_bytes()
+    last_frames = [0] + [(length - 32) // (WAL_PAGE_SIZE + 24) for length in wal_lengths[1:]]
+    history = run("wal-history", baseline, wal)
+    assert history["page_size"] == WAL_PAGE_SIZE and history["committed_frames"] == last_frames[-1]
+    assert history["valid_frames"] == last_frames[-1] and history["ignored_wal_bytes"] == 0
+    assert history["stop_reason"] == "end_of_file" and int(history["stop_offset"]) == len(wal_bytes)
+    assert history["commits"] == [
+        dict(revision=i, first_frame=last_frames[i - 1] + 1 if i else 0,
+             last_frame=last_frames[i], page_count=count)
+        for i, count in enumerate(page_counts)
+    ]
+    actual_rows = []
+    for revision, expected in enumerate(expected_rows):
+        report = run("wal-rows", baseline, wal, str(revision), "status")
+        assert report["revision"] == history["commits"][revision]
+        if revision == 4:
+            # ALTER TABLE projects a trailing NULL in SQL for untouched rows.
+            # Only the subsequently updated row stores the new field on disk.
+            expected = [row if row[0] == 41 else row[:-1] for row in expected]
+        check_rows({**report, "page_size": WAL_PAGE_SIZE, "page_count": page_counts[revision]}, expected)
+        check_origins(report["entries"], baseline_bytes, wal_bytes, last_frames[revision], WAL_PAGE_SIZE)
+        actual_rows.append({int(row["rowid"]): row for row in report["entries"]})
+    stable = run("wal-rows", baseline, wal, "3", "stable")["entries"]
+    assert stable[0]["source"]["kind"] == "main"
+    check_origins(stable, baseline_bytes, wal_bytes, last_frames[3], WAL_PAGE_SIZE)
+    assert int(actual_rows[3][HIGH_ROWID]["source"]["revision"]) == 3
+    assert actual_rows[1][41]["source"]["frame"] != actual_rows[2][41]["source"]["frame"]
+
+    for before, after in ((0, 1), (1, 2), (0, 2), (2, 3), (3, 0), (3, 3)):
+        report = run("wal-changes", baseline, wal, str(before), str(after), "status")
+        assert report["from"] == history["commits"][before] and report["to"] == history["commits"][after]
+        old, new = ({row[0]: row[1:] for row in expected_rows[i]} for i in (before, after))
+        expected = []
+        for key in sorted(old.keys() | new.keys()):
+            if key not in old:
+                expected.append(dict(kind="added", after=actual_rows[after][key]))
+            elif key not in new:
+                expected.append(dict(kind="removed", before=actual_rows[before][key]))
+            elif old[key] != new[key]:
+                expected.append(dict(kind="changed", before=actual_rows[before][key], after=actual_rows[after][key]))
+        assert report["entries"] == expected
+    assert run("wal-changes", baseline, wal, "0", "2", "status")["entries"] == []
+    run("wal-changes", baseline, wal, "3", "4", "status", error="table definitions differ")
+    run("wal-rows", baseline, wal, "4", "compact", error="Invalid")
+    run("wal-rows", baseline, wal, "4", "missing", error="NotFound")
+    run("wal-rows", baseline, wal, "-1", "status", error="must be nonnegative")
+    assert baseline.read_bytes() == baseline_bytes and wal.read_bytes() == wal_bytes
+
+    empty = directory / "empty.wal"
+    empty.write_bytes(b"")
+    assert run("wal-history", baseline, empty)["commits"] == history["commits"][:1]
+    assert run("wal-rows", baseline, empty, "0", "status")["entries"] == list(actual_rows[0].values())
 
 
 def compare_backups(directory):
@@ -340,8 +462,10 @@ def main():
         check_rowid_lookup(directory)
         wal_capture(directory)
         wal_resize(directory)
+        compare_history(directory)
         compare_backups(directory)
-    print(f"SQLite {sqlite3.sqlite_version}: {total} records matched across 3 page sizes and 3 encodings; rowid lookup, pagination, page boundaries, WAL and backup diff cases passed")
+    print(f"SQLite {sqlite3.sqlite_version}: {total} legacy records matched across 3 page sizes and 3 encodings")
+    print("SQLite WAL timeline: 5 revisions, 6 diff pairs, raw cell provenance, resize and invalid-tail cases passed")
 
 
 if __name__ == "__main__":

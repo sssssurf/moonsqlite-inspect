@@ -1,7 +1,8 @@
 ///|
 pub struct Snapshot {
   priv main : Bytes
-  priv overlay : Map[Int32, BytesView]
+  priv wal : Bytes
+  priv overlay : @sqlite.RangeWalSource?
   priv encoding : TextEncoding
   page_size : Int32
   page_count : Int32
@@ -28,14 +29,31 @@ fn Snapshot::page(
   guard number >= 1 && number <= self.page_count else {
     raise Invalid("page \{number} is outside the snapshot")
   }
-  if self.overlay.get(number) is Some(bytes) {
-    return bytes
+  if self.overlay is Some(overlay) {
+    return snapshot_page(self.main, self.wal, overlay, number, self.page_size)
   }
   guard number <= self.main.length() / self.page_size else {
     raise Invalid("page \{number} is missing from the snapshot")
   }
   let offset = (number - 1) * self.page_size
   self.main[offset:offset + self.page_size]
+}
+
+///|
+fn snapshot_page(
+  main : Bytes,
+  wal : Bytes,
+  overlay : @sqlite.RangeWalSource,
+  number : Int32,
+  page_size : Int32,
+) -> BytesView raise InspectError {
+  let range = overlay.page_range(number) catch {
+    error => raise inspect_error(error)
+  }
+  match range {
+    MainPage(offset) => main[offset.to_int():offset.to_int() + page_size]
+    WalPage(offset) => wal[offset.to_int():offset.to_int() + page_size]
+  }
 }
 
 ///|
@@ -64,16 +82,37 @@ pub fn open_snapshot(main : Bytes, wal? : Bytes) -> Snapshot raise InspectError 
     (write_version != 2UL || read_version != 2UL) {
     raise Invalid("a nonempty WAL requires a WAL-mode main image")
   }
-  let wal = read_wal(wal.unwrap_or(b"")[:], page_size)
+  let wal = wal.unwrap_or(b"")
+  let overlay = if wal.is_empty() {
+    None
+  } else {
+    let frame_capacity = wal.length() / (page_size + 24) + 1
+    let source = @sqlite.RangeWalSource::new(
+      @sqlite.BytesSource::new(main),
+      @sqlite.BytesSource::new(wal),
+      tail_policy=UseValidPrefix,
+      max_frames=frame_capacity,
+      max_overlay_pages=frame_capacity,
+    ) catch {
+      error => raise inspect_error(error)
+    }
+    if source.inspection().stop_reason == WalInvalidFrame {
+      raise Invalid("invalid WAL frame page number")
+    }
+    Some(source)
+  }
   let physical_pages = main.length() / page_size
   let main_count = word(data, 28, 4)
-  let page_count = match wal.page_count {
-    Some(count) => count
+  let page_count = match overlay {
+    Some(source) => source.page_count()
     None if main_count != 0UL && word(data, 24, 4) == word(data, 92, 4) =>
       bounded(main_count, physical_pages, "main page count")
     None => physical_pages
   }
-  let header = wal.pages.get(1).unwrap_or(data[:page_size])
+  let header = match overlay {
+    Some(source) => snapshot_page(main, wal, source, 1, page_size)
+    None => data[:page_size]
+  }
   guard header[:16] == data[:16] && word(header, 16, 2) == raw_size.to_uint64() else {
     raise Invalid("effective page 1 is inconsistent with the main header")
   }
@@ -88,14 +127,22 @@ pub fn open_snapshot(main : Bytes, wal? : Bytes) -> Snapshot raise InspectError 
   guard usable_size >= 480 && word(header, 21, 3) == 0x402020UL else {
     raise Invalid("invalid SQLite usable page size or payload fractions")
   }
+  let frames = overlay
+    .map(fn(source) { source.inspection().committed_frames })
+    .unwrap_or(0)
   {
     main,
-    overlay: wal.pages,
+    wal,
+    overlay,
     encoding,
     page_size,
     page_count,
     usable_size,
-    wal_frames_applied: wal.frames_applied,
-    wal_tail_bytes: wal.tail_bytes,
+    wal_frames_applied: frames,
+    wal_tail_bytes: if wal.is_empty() {
+      0
+    } else {
+      wal.length() - 32 - frames * (page_size + 24)
+    },
   }
 }

@@ -16,8 +16,9 @@ jobs:
           echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
       - name: Verify library and SQLite fixtures
         run: |
+          moon update
           for target in js native wasm wasm-gc; do
-            moon check --target "$target" --frozen
+            moon check --target "$target"
             moon build --target "$target" --frozen
             moon test --target "$target" --frozen
           done

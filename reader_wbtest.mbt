@@ -46,10 +46,3 @@ test "UTF-16 record text preserves its leading BOM and supplementary characters"
   }
   assert_true(rejected)
 }
-
-///|
-test "WAL checksums interpret each word according to the magic byte order" {
-  let bytes = b"\x01\x00\x00\x00\x02\x00\x00\x00"
-  assert_eq(wal_checksum(bytes[:], false, (0U, 0U)), (1U, 3U))
-  assert_eq(wal_checksum(bytes[:], true, (0U, 0U)), (0x01000000U, 0x03000000U))
-}

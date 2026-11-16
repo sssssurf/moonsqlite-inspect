@@ -6,6 +6,13 @@ pub(all) enum RowChange {
 }
 
 ///|
+priv enum StoredChange[R] {
+  RowAdded(R)
+  RowRemoved(R)
+  RowChanged(R, R)
+}
+
+///|
 /// Compare stored rowid-table records. The two catalog definitions must match.
 pub fn diff_table(
   before : Snapshot,
@@ -20,30 +27,50 @@ pub fn diff_table(
   let old = before.table_cursor(before_entry.root_page)
   let new = after.table_cursor(after_entry.root_page)
   let changes = []
-  let mut old_row = old.next()
-  let mut new_row = new.next()
-  while (old_row, new_row) is (Some(left), Some(right)) {
+  merge_stored_rows(() => old.next(), () => new.next(), row => row, change => {
+    changes.push(
+      match change {
+        RowAdded(row) => RowChange::Added(row)
+        RowRemoved(row) => RowChange::Removed(row)
+        RowChanged(left, right) => RowChange::Changed(left, right)
+      },
+    )
+  })
+  changes
+}
+
+///|
+fn[R] merge_stored_rows(
+  before : () -> R? raise InspectError,
+  after : () -> R? raise InspectError,
+  row : (R) -> Row,
+  emit : (StoredChange[R]) -> Unit,
+) -> Unit raise InspectError {
+  let mut old_row = before()
+  let mut new_row = after()
+  while (old_row, new_row) is (Some(old), Some(new)) {
+    let left = row(old)
+    let right = row(new)
     if left.rowid < right.rowid {
-      changes.push(Removed(left))
-      old_row = old.next()
+      emit(RowRemoved(old))
+      old_row = before()
     } else if left.rowid > right.rowid {
-      changes.push(Added(right))
-      new_row = new.next()
+      emit(RowAdded(new))
+      new_row = after()
     } else {
       if left.values != right.values {
-        changes.push(Changed(left, right))
+        emit(RowChanged(old, new))
       }
-      old_row = old.next()
-      new_row = new.next()
+      old_row = before()
+      new_row = after()
     }
   }
-  while old_row is Some(row) {
-    changes.push(Removed(row))
-    old_row = old.next()
+  while old_row is Some(old) {
+    emit(RowRemoved(old))
+    old_row = before()
   }
-  while new_row is Some(row) {
-    changes.push(Added(row))
-    new_row = new.next()
+  while new_row is Some(new) {
+    emit(RowAdded(new))
+    new_row = after()
   }
-  changes
 }
