@@ -5,7 +5,30 @@ pub(all) enum Value {
   Real(Double)
   Text(String)
   Blob(Bytes)
-} derive(Eq, @debug.Debug)
+}
+
+///|
+pub impl Eq for Value with fn equal(self, other) {
+  match (self, other) {
+    (Null, Null) => true
+    (Integer(left), Integer(right)) => left == right
+    (Real(left), Real(right)) => left == right
+    (Text(left), Text(right)) => left == right
+    (Blob(left), Blob(right)) => left == right
+    _ => false
+  }
+}
+
+///|
+pub impl @debug.Debug for Value with fn to_repr(self) {
+  match self {
+    Null => @debug.Repr::ctor("Null", [])
+    Integer(value) => variant_repr("Integer", value)
+    Real(value) => variant_repr("Real", value)
+    Text(value) => variant_repr("Text", value)
+    Blob(value) => variant_repr("Blob", value)
+  }
+}
 
 ///|
 pub extend Value with Eq::{equal, not_equal}

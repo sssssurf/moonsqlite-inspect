@@ -3,7 +3,21 @@ pub suberror InspectError {
   Invalid(String)
   Unsupported(String)
   NotFound(String)
-} derive(@debug.Debug)
+}
+
+///|
+fn[T : @debug.Debug] variant_repr(name : String, value : T) -> @debug.Repr {
+  @debug.Repr::ctor(name, [(None, @debug.Repr(value))])
+}
+
+///|
+pub impl @debug.Debug for InspectError with fn to_repr(self) {
+  match self {
+    Invalid(message) => variant_repr("Invalid", message)
+    Unsupported(message) => variant_repr("Unsupported", message)
+    NotFound(message) => variant_repr("NotFound", message)
+  }
+}
 
 ///|
 pub extend InspectError with @debug.Debug::{to_repr}

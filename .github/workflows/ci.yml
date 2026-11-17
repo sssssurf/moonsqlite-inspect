@@ -16,6 +16,7 @@ jobs:
           echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
       - name: Verify library and SQLite fixtures
         run: |
+          moon version --all
           moon update
           for target in js native wasm wasm-gc; do
             moon check --target "$target" --deny-warn
