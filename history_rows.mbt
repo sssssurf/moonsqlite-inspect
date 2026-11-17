@@ -121,14 +121,31 @@ pub fn diff_revisions(
 ) -> Array[VersionedChange] raise InspectError {
   let before_entry = before.table_entry(name)
   let after_entry = after.table_entry(name)
+  let changes = []
+  ignore(
+    visit_revision_pair(before, before_entry, after, after_entry, change => {
+      changes.push(change)
+      true
+    }),
+  )
+  changes
+}
+
+///|
+fn visit_revision_pair(
+  before : WalRevision,
+  before_entry : @sqlite.SchemaEntry,
+  after : WalRevision,
+  after_entry : @sqlite.SchemaEntry,
+  emit : (VersionedChange) -> Bool,
+) -> Bool raise InspectError {
   guard before_entry.sql is Some(sql) && after_entry.sql == Some(sql) else {
     raise Unsupported("table definitions differ between revisions")
   }
   let old = before.table_cursor(before_entry.root_page)
   let new = after.table_cursor(after_entry.root_page)
-  let changes = []
   merge_stored_rows(() => old.next(), () => new.next(), row => row.row, change => {
-    changes.push(
+    emit(
       match change {
         RowAdded(row) => VersionedChange::Added(row)
         RowRemoved(row) => VersionedChange::Removed(row)
@@ -136,5 +153,4 @@ pub fn diff_revisions(
       },
     )
   })
-  changes
 }

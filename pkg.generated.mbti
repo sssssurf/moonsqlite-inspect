@@ -99,6 +99,12 @@ pub(all) struct VersionedRow {
   origin : PageOrigin
 }
 
+pub(all) enum WalChangeEvent {
+  CommitStarted(WalCommit, WalCommit)
+  CommitChange(VersionedChange)
+  CommitFinished(WalCommit)
+}
+
 pub(all) struct WalCommit {
   revision : Int32
   first_frame : Int32
@@ -128,8 +134,10 @@ pub struct WalTimeline {
   stop_reason : String
   // private fields
 }
+pub fn WalTimeline::commit(Self, Int32) -> WalCommit raise InspectError
 pub fn WalTimeline::commits(Self) -> Array[WalCommit]
 pub fn WalTimeline::snapshot(Self, Int32) -> WalRevision raise InspectError
+pub fn WalTimeline::visit_adjacent_changes(Self, String, from~ : Int32, to~ : Int32, (WalChangeEvent) -> Bool) -> Bool raise InspectError
 
 // Type aliases
 

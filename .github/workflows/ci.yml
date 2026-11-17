@@ -18,8 +18,10 @@ jobs:
         run: |
           moon update
           for target in js native wasm wasm-gc; do
-            moon check --target "$target"
-            moon build --target "$target" --frozen
-            moon test --target "$target" --frozen
+            moon check --target "$target" --deny-warn
+            moon build --target "$target" --frozen --deny-warn
+            moon test --target "$target" --frozen --deny-warn
           done
-          python3 scripts/sqlite_oracle.py
+          moon fmt --check
+          python3 -B scripts/sqlite_oracle.py
+          moon package --frozen

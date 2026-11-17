@@ -1,8 +1,9 @@
 import {
   "sssssurf/moonsqlite-inspect" @inspect,
   "moonbitlang/core/env",
+  "moonbitlang/core/encoding/utf8",
+  "moonbitlang/core/json",
   "moonbitlang/core/string",
-  "moonbitlang/core/encoding/hex",
 }
 
 supported_targets = "js"

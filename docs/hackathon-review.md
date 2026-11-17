@@ -24,16 +24,14 @@
 
 | 验收项 | 证据或状态 |
 | --- | --- |
-| MoonBit 实现与实质贡献 | `timeline.mbt` 实现页版本索引和历史视图。`history_rows.mbt` 将上游游标接入行级对比与物理来源。 [页版本索引](../timeline.mbt) · [行差异](../history_rows.mbt) |
-| 公开仓库与开发记录 | 保留原项目的公开历史。复审增量集中在 `0.2.0` 开发提交。 [默认分支提交](https://github.com/sssssurf/moonsqlite-inspect/commits/main/) |
-| 安装、示例、核心测试与 CI | README 提供从源码构建与完整复现命令。四个 MoonBit 后端均可运行库测试。SQLite 对照检查五个历史视图、六组版本对比、原始 cell 来源、缩小再增长，以及未提交和损坏尾部。 [README](../README.md) · [CI](https://github.com/sssssurf/moonsqlite-inspect/actions/workflows/ci.yml) |
+| MoonBit 实现与实质贡献 | `timeline.mbt` 实现页版本索引和历史视图，`history_rows.mbt` 实现行级对比与来源，`series.mbt` 复用同一索引导出连续提交。受控采集脚本持有基线读事务并生成 SHA-256 清单。 [页版本索引](../timeline.mbt) · [批量导出](../series.mbt) · [采集脚本](../scripts/wal_capture.py) |
+| 公开仓库与开发记录 | `0.2.0` 加入历史视图，`0.3.0` 加入逐提交导出、采集清单验证和 JS 读取优化。 [默认分支提交](https://github.com/sssssurf/moonsqlite-inspect/commits/main/) |
+| 安装、示例、核心测试与 CI | README 提供从源码构建与复现命令。CI 运行四个 MoonBit 后端、格式检查、SQLite 对照与打包。测试覆盖原始 cell 来源、缩小再增长、全部历史批次与逐对结果、仅溢出页更新、输出上限和错配清单。 [README](../README.md) · [CI](https://github.com/sssssurf/moonsqlite-inspect/actions/workflows/ci.yml) |
 | 许可与依赖来源 | 项目新增代码 Apache-2.0，上游同为 Apache-2.0，由 Mooncakes 安装。示例数据库由 SQLite 生成。 [项目许可](../LICENSE) · [上游许可](https://github.com/prowk/MoonSQLiteFile/blob/v0.8.1/LICENSE) |
-| Mooncakes 发布 | `0.2.0` 已生成本地分发包，JS 和 native 的独立消费模块均通过调用检查。公共 registry 发布与安装复验待完成 |
+| Mooncakes 发布 | `0.3.0` 已生成本地分发包。Mooncakes 公开发布和从注册表安装复验待完成 |
 
-本地 Windows 对 12,000 次提交的同一 WAL 运行五次，历史枚举中位耗时约 373 ms。旧的最新快照路径接入上游后，同一基准下从 `3bd0c34` 的 206 ms 增至 313 ms。该命令现在通过上游校验和覆盖索引读取，输出与基准版本逐项相同。 [基准脚本](../scripts/benchmark.py)
+### 性能与边界
 
-### 验收前剩余核心工作
+`0.3.0` 在 JS 上把传给上游 WAL 校验器的帧切片改为共享只读视图。以 `01b8477` 为对照，同一份 12,000 次提交的 WAL 各运行五次，最新快照读取中位耗时从 562.0 ms 降到 400.1 ms，峰值内存中位值从 87.0 MiB 降到 81.5 MiB，输出逐项相同。结果来自本机 Windows、Node.js 24.13.0 和 SQLite 3.45.3。 [基准脚本](../scripts/benchmark.py)
 
-1. 提供一次建索引后逐提交导出的入口，使长期业务回归可以获得连续的提交差异。用固定比较范围、真实 SQLite 批量提交和有界输出验证完整性。
-2. 为受控采集产物记录基线、WAL 的哈希和采集顺序，测试 checkpoint 后误配、WAL reset 和截断再增长。采集程序负责提前保存基线，校验清单核对副本完整性。
-3. 发布 Mooncakes 包并验证外部项目安装和调用，保留对应版本的 CI 与复现记录。
+命令行每批返回最多 8 MiB 的 JSON，默认比较 32 个相邻提交，超限可缩小范围或改用库的逐行访问接口。历史比较以普通 rowid 表的相同存储定义为前提。采集清单校验文件是否与受控采集时一致，采集顺序由 SQLite 读事务保护。 [历史导出和采集约定](wal-timeline.md)

@@ -47,6 +47,7 @@ test "historical pages retain only the last write in a commit and survive until 
     wal: b"",
     revisions,
     versions,
+    frame_pages: [],
     page_size: 512,
     valid_frames: 7,
     committed_frames: 7,
@@ -91,6 +92,7 @@ test "range reads straddle main and WAL pages and normalize the commit page coun
     wal: Bytes::from_array(FixedArray::make(568, b'W')),
     revisions,
     versions,
+    frame_pages: [],
     page_size: 512,
     valid_frames: 1,
     committed_frames: 1,
@@ -112,4 +114,25 @@ test "range reads straddle main and WAL pages and normalize the commit page coun
     _ => false
   }
   assert_true(outside)
+}
+
+///|
+test "WAL byte ranges preserve slice offsets and reject out-of-bounds reads" {
+  let data = range_bytes(b"0123456789", 2, 8)
+  let source : &@sqlite.RangeSource = WalBytesSource::{ data, }
+  assert_eq(source.byte_length64(), 6L)
+  assert_eq(source.read_range64(1L, 3), b"345")
+  assert_eq(source.read_range64(6L, 0), b"")
+  assert_eq(data, b"234567")
+  for range in [(-1L, 1), (0L, -1), (6L, 1), (9223372036854775807L, 1)] {
+    let (offset, count) = range
+    let rejected = try {
+      ignore(source.read_range64(offset, count))
+      false
+    } catch {
+      @sqlite.SourceError::RangeOutOfBounds(_) => true
+      _ => false
+    }
+    assert_true(rejected)
+  }
 }

@@ -1,20 +1,23 @@
 ///|
-extern "js" fn read_file(path : String) -> Bytes? =
-  #| (path) => {
+extern "js" fn read_file(path : String, limit : Int32) -> Bytes? =
+  #| (path, limit) => {
   #|   const fs = require('node:fs');
   #|   try {
   #|     const fd = fs.openSync(path, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0));
   #|     try {
-  #|       const stat = fs.fstatSync(fd);
-  #|       if (!stat.isFile() || stat.size > 64 * 1024 * 1024) return null;
-  #|       const bytes = new Uint8Array(stat.size + 1);
+  #|       const stat = fs.fstatSync(fd, { bigint: true });
+  #|       if (!stat.isFile() || stat.size > BigInt(limit)) return null;
+  #|       const size = Number(stat.size);
+  #|       const bytes = new Uint8Array(size);
   #|       let length = 0;
   #|       while (length < bytes.length) {
   #|         const read = fs.readSync(fd, bytes, length, bytes.length - length, null);
   #|         if (read === 0) break;
   #|         length += read;
   #|       }
-  #|       return length === stat.size ? bytes.subarray(0, length) : null;
+  #|       const after = fs.fstatSync(fd, { bigint: true });
+  #|       return length === size && after.size === stat.size &&
+  #|         after.mtimeNs === stat.mtimeNs && after.ctimeNs === stat.ctimeNs ? bytes : null;
   #|     } finally {
   #|       fs.closeSync(fd);
   #|     }
@@ -34,13 +37,17 @@ priv suberror CliError {
 
 ///|
 fn load(path : String) -> Bytes raise CliError {
-  guard read_file(path) is Some(bytes) else {
+  guard read_file(path, 64 * 1024 * 1024) is Some(bytes) else {
     raise CliError(
       "Cannot read a stable regular file up to 64 MiB at \{Json(path).stringify()}",
     )
   }
   bytes
 }
+
+///|
+extern "js" fn blob_hex(data : Bytes) -> String =
+  #| (bytes) => Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('hex')
 
 ///|
 fn load_snapshot(path : String, wal_path : String?) -> @inspect.Snapshot raise {
@@ -72,14 +79,17 @@ fn parse_rowid(value : String) -> Int64 raise CliError {
 }
 
 ///|
-fn parse_limit(value : String) -> Int32 raise CliError {
+fn parse_limit(
+  value : String,
+  label~ : String = "row limit",
+) -> Int32 raise CliError {
   let limit = @string.parse_int(value, base=10) catch {
     _ =>
       raise CliError(
-        "Expected a positive 32-bit decimal row limit, got \{Json(value).stringify()}",
+        "Expected a positive 32-bit decimal \{label}, got \{Json(value).stringify()}",
       )
   }
-  guard limit > 0 else { raise CliError("The row limit must be positive") }
+  guard limit > 0 else { raise CliError("The \{label} must be positive") }
   limit
 }
 
@@ -90,7 +100,7 @@ fn value_json(value : @inspect.Value) -> Json {
     Integer(number) => { "type": "integer", "value": number.to_string() }
     Real(number) => { "type": "real", "value": number.to_string() }
     Text(text) => { "type": "text", "value": text }
-    Blob(bytes) => { "type": "blob", "value": @hex.encode(bytes[:]) }
+    Blob(bytes) => { "type": "blob", "value": blob_hex(bytes) }
   }
 }
 
@@ -149,22 +159,28 @@ fn diff_json(
 
 ///|
 fn run(args : ArrayView[String]) -> Json raise {
-  if args is ["wal-history", base, wal] {
-    return history_json(@inspect.open_wal_timeline(load(base), load(wal)))
+  if args is ["wal-history", base, wal, .. options] {
+    return history_json(load_timeline(base, wal, manifest_option(options)))
   }
-  if args is ["wal-rows", base, wal, revision, name] {
+  if args is ["wal-verify", base, wal, manifest] {
+    return {
+      "manifest_verified": true,
+      "timeline": history_json(load_timeline(base, wal, Some(manifest))),
+    }
+  }
+  if args is ["wal-rows", base, wal, revision, name, .. options] {
     let number = parse_revision(revision)
-    let timeline = @inspect.open_wal_timeline(load(base), load(wal))
+    let timeline = load_timeline(base, wal, manifest_option(options))
     let snapshot = timeline.snapshot(number)
     return {
       "revision": commit_json(snapshot.info),
       "entries": snapshot.scan_table(name).map(versioned_row_json),
     }
   }
-  if args is ["wal-changes", base, wal, before, after, name] {
+  if args is ["wal-changes", base, wal, before, after, name, .. options] {
     let from = parse_revision(before)
     let to = parse_revision(after)
-    let timeline = @inspect.open_wal_timeline(load(base), load(wal))
+    let timeline = load_timeline(base, wal, manifest_option(options))
     return changes_json(timeline.snapshot(from), timeline.snapshot(to), name)
   }
   if args is ["diff", before, after, name] {
@@ -215,9 +231,11 @@ fn run(args : ArrayView[String]) -> Json raise {
     _ => {
       let usage =
         #| Usage: moonsqlite-inspect COMMAND
-        #|   wal-history BASE WAL
-        #|   wal-rows BASE WAL REVISION TABLE
-        #|   wal-changes BASE WAL FROM TO TABLE
+        #|   wal-history BASE WAL [--manifest FILE]
+        #|   wal-rows BASE WAL REVISION TABLE [--manifest FILE]
+        #|   wal-changes BASE WAL FROM TO TABLE [--manifest FILE]
+        #|   wal-series BASE WAL FROM TO TABLE [--limit COMMITS] [--manifest FILE]
+        #|   wal-verify BASE WAL MANIFEST
         #|   catalog DB [--wal WAL]
         #|   (table|index) DB NAME [--wal WAL]
         #|   row DB NAME ROWID [--wal WAL]
@@ -265,8 +283,26 @@ fn run(args : ArrayView[String]) -> Json raise {
 }
 
 ///|
+fn run_text(args : ArrayView[String]) -> String raise {
+  match args {
+    ["wal-series", base, wal, from, to, name, .. options] => {
+      let (limit, manifest) = series_options(options)
+      let timeline = load_timeline(base, wal, manifest)
+      series_json(
+        timeline,
+        name,
+        parse_revision(from),
+        parse_revision(to),
+        limit,
+      )
+    }
+    _ => run(args).stringify()
+  }
+}
+
+///|
 fn main {
-  println(run(@env.args()[2:]).stringify()) catch {
+  println(run_text(@env.args()[2:])) catch {
     CliError(message) => fail(message)
     @inspect.InspectError::Invalid(message) => fail("Invalid: \{message}")
     @inspect.InspectError::Unsupported(message) =>

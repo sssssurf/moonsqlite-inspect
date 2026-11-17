@@ -1,6 +1,6 @@
 # MoonSQLite Inspect
 
-Open and compare committed versions of an offline SQLite database in pure MoonBit. Given a checkpointed baseline and the WAL written after it, MoonSQLite Inspect can read an earlier revision, compare two revisions by rowid and trace each reported cell to its page in the baseline or to a specific WAL frame. It uses [MoonSQLiteFile](https://mooncakes.io/docs/prowk/moonsqlitefile) for WAL verification and historical record decoding. The CLI uses Node.js for file input.
+Open and compare committed versions of an offline SQLite database. Given a checkpointed baseline and the WAL written after it, MoonSQLite Inspect can read an earlier revision, compare two revisions by rowid and trace each reported cell to its page in the baseline or to a specific WAL frame. The history index and row comparisons are implemented in MoonBit and use MoonSQLiteFile for WAL verification and record decoding. The CLI uses Node.js for file input and hashing. [MoonSQLiteFile](https://mooncakes.io/docs/prowk/moonsqlitefile)
 
 ## Reproduce a WAL history
 
@@ -10,18 +10,22 @@ Run the following commands from the repository root with MoonBit, Node.js and Py
 moon update
 moon build --target js
 python scripts/wal_demo.py _build/wal-demo
+node _build/js/debug/build/cmd/main/main.js wal-verify _build/wal-demo/baseline.sqlite _build/wal-demo/capture.wal _build/wal-demo/capture.json
 node _build/js/debug/build/cmd/main/main.js wal-history _build/wal-demo/baseline.sqlite _build/wal-demo/capture.wal
 node _build/js/debug/build/cmd/main/main.js wal-rows _build/wal-demo/baseline.sqlite _build/wal-demo/capture.wal 1 status
 node _build/js/debug/build/cmd/main/main.js wal-changes _build/wal-demo/baseline.sqlite _build/wal-demo/capture.wal 0 1 status
 node _build/js/debug/build/cmd/main/main.js wal-changes _build/wal-demo/baseline.sqlite _build/wal-demo/capture.wal 1 2 status
 node _build/js/debug/build/cmd/main/main.js wal-changes _build/wal-demo/baseline.sqlite _build/wal-demo/capture.wal 0 2 status
+node _build/js/debug/build/cmd/main/main.js wal-series _build/wal-demo/baseline.sqlite _build/wal-demo/capture.wal 0 3 status --limit 2 --manifest _build/wal-demo/capture.json
 ```
 
-The demo creates four SQLite commits. Revision 0 is the baseline. Row 41 changes from `ready` to `waiting` in revision 1 and returns to `ready` in revision 2. The two adjacent comparisons each report one change. The comparison from 0 to 2 returns an empty `entries` array. Its row data and changes carry `source` fields that identify the cell's page payload offset and, for WAL pages, the frame and revision that supplied that page.
+The demo creates four SQLite commits. Revision 0 is the baseline. Row 41 changes from `ready` to `waiting` in revision 1 and returns to `ready` in revision 2. The two adjacent comparisons each report one change. The comparison from 0 to 2 returns an empty `entries` array. Reported rows identify the cell's page payload offset and, for WAL pages, the frame and revision that supplied that page.
 
-For a real input, copy the baseline immediately after a successful `wal_checkpoint(TRUNCATE)`, before the next write. Preserve the later WAL while the writer is idle, with checkpoints and WAL resets prevented between those two steps. SQLite can checkpoint newer pages into the main file. For a consistent same-time pair use the latest-snapshot commands below. Input sizes for the CLI are limited to 64 MiB per file. [SQLite WAL format](https://sqlite.org/walformat.html) · [Snapshot details](docs/wal-timeline.md)
+`wal-series` compares every adjacent pair in the requested interval, including pairs with zero changes. Each invocation indexes the WAL once and returns up to 32 comparisons by default. Use `--limit` to request 1–1024 comparisons. The demo returns `next_from: 2`, so the next call uses `2 3 status`. A `null` continuation marks completion. Each response is limited to 8 MiB. If it exceeds the limit, retry with fewer comparisons or use the library's row visitor for a large individual comparison. Revision 4 in the demo changes the table definition, so the series stops at revision 3.
 
-From MoonBit, open the capture once with `open_wal_timeline(base, wal)`. Use `commits()` to list revisions, `snapshot(revision)` to open one, `scan_table(name)` to read its stored rows and `diff_revisions(before, after, name)` to compare two revisions with matching table definitions. `page_origin(page)` gives the underlying byte location for a logical page in a revision.
+`wal-verify` checks file sizes, SHA-256 digests and the WAL epoch against `capture.json`, then reports the validated timeline. Provide `--manifest FILE` to apply the same check before any history read or comparison. To make your own bundle, use the capture helper with a SQLite writer you control. It keeps a read transaction open from the checkpointed baseline through export. The CLI accepts up to 64 MiB per database or WAL file. Use the latest-snapshot commands below for a consistent same-time database/WAL pair. [Capture and snapshot details](docs/wal-timeline.md)
+
+From MoonBit, open the capture once with `open_wal_timeline(base, wal)`. Use `commits()` to list revisions, `snapshot(revision)` to read stored rows and `diff_revisions(before, after, name)` for a pair with matching table definitions. `visit_adjacent_changes` emits ordered changes and completion events one comparison at a time. `page_origin(page)` gives the underlying byte location of a logical page.
 
 ## Inspect a backup or the latest snapshot
 
@@ -54,9 +58,9 @@ moon build --target js --frozen
 python scripts/sqlite_oracle.py
 ```
 
-The oracle checks 6,012 legacy table, index and `WITHOUT ROWID` records across three page sizes and three encodings. It compares rowid lookups and pagination with SQLite queries, including signed 64-bit boundaries, and checks malformed pages and backup differences. The WAL cases check five historical views, six revision pairs, page provenance against raw SQLite cell bytes, truncation and regrowth, partially written or invalid tails, and valid uncommitted frames. [SQLite file format](https://sqlite.org/fileformat2.html)
+The oracle checks 6,012 legacy table, index and `WITHOUT ROWID` records across three page sizes and three encodings. It compares signed rowid lookups, pagination and differences with SQLite queries and checks page provenance against raw cell bytes. WAL coverage includes truncation and regrowth, partially written tails, uncommitted frames, batch continuation, overflow-only updates, output limits and rejection of mismatched capture files. [SQLite file format](https://sqlite.org/fileformat2.html)
 
-After building the CLI, `python scripts/benchmark.py` measures latest WAL loading, backup comparison and point lookup. Add `--history` to also measure indexing 12,000 commits. Pass `--baseline /path/to/main.js` to compare two builds on the WAL and backup inputs.
+After building the CLI, `python -B scripts/benchmark.py` measures latest WAL loading, backup comparison and point lookup. Add `--history` to measure indexing 12,000 commits and `--compare-export` to compare full exports of an 8,000-row BLOB table. Pass `--baseline /path/to/main.js` to run the paired cases against an earlier build. The benchmark checks matching results before reporting times.
 
 ## Source and license
 

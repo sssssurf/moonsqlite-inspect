@@ -52,25 +52,28 @@ fn history_json(timeline : @inspect.WalTimeline) -> Json {
 }
 
 ///|
+fn versioned_change_json(change : @inspect.VersionedChange) -> Json {
+  match change {
+    Added(row) => { "kind": "added", "after": versioned_row_json(row) }
+    Removed(row) => { "kind": "removed", "before": versioned_row_json(row) }
+    Changed(old, new) =>
+      {
+        "kind": "changed",
+        "before": versioned_row_json(old),
+        "after": versioned_row_json(new),
+      }
+  }
+}
+
+///|
 fn changes_json(
   before : @inspect.WalRevision,
   after : @inspect.WalRevision,
   name : String,
 ) -> Json raise @inspect.InspectError {
-  let changes = @inspect.diff_revisions(before, after, name).map(fn(
-    change,
-  ) -> Json {
-    match change {
-      Added(row) => { "kind": "added", "after": versioned_row_json(row) }
-      Removed(row) => { "kind": "removed", "before": versioned_row_json(row) }
-      Changed(old, new) =>
-        {
-          "kind": "changed",
-          "before": versioned_row_json(old),
-          "after": versioned_row_json(new),
-        }
-    }
-  })
+  let changes = @inspect.diff_revisions(before, after, name).map(
+    versioned_change_json,
+  )
   {
     "from": commit_json(before.info),
     "to": commit_json(after.info),

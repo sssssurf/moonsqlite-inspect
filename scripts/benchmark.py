@@ -1,4 +1,4 @@
-"""Measure the built CLI on WAL, backup comparison and point lookup workloads."""
+"""Measure the built CLI on WAL, backup comparison, table export and lookup workloads."""
 
 import argparse
 from contextlib import closing
@@ -85,6 +85,7 @@ def main():
     parser.add_argument("--cli", type=Path, default=ROOT / "_build/js/debug/build/cmd/main/main.js")
     parser.add_argument("--baseline", type=Path, help="Compiled CLI from an earlier version")
     parser.add_argument("--history", action="store_true", help="Also measure indexing all WAL revisions")
+    parser.add_argument("--compare-export", action="store_true", help="Also compare the full BLOB table export")
     parser.add_argument("--runs", type=int, default=5)
     options = parser.parse_args()
     if options.runs < 1:
@@ -114,6 +115,11 @@ def main():
         diff, report = measure([(name, cli, diff_command) for name, cli in clis], preload, options.runs)
         assert [(entry["kind"], entry["after"]["rowid"]) for entry in report["entries"]] == [("changed", "4000")]
         backup = directory / "before.sqlite"
+        export = None
+        if options.compare_export:
+            export, report = measure([(name, cli, ["table", backup, "items"]) for name, cli in clis],
+                                     preload, options.runs)
+            assert len(report["entries"]) == BACKUP_ROWS
         lookup, report = measure([
             ("table_then_filter", current, ["table", backup, "items"]),
             ("row", current, ["row", backup, "items", "4000"]),
@@ -129,6 +135,8 @@ def main():
     }
     if history is not None:
         results["history"] = {"commits": WAL_COMMITS, "bytes": wal_bytes, "results": history}
+    if export is not None:
+        results["table_export"] = {"rows": BACKUP_ROWS, "results": export}
     print(json.dumps(results, indent=2))
 
 

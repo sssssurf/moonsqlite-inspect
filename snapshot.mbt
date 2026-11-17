@@ -89,7 +89,7 @@ pub fn open_snapshot(main : Bytes, wal? : Bytes) -> Snapshot raise InspectError 
     let frame_capacity = wal.length() / (page_size + 24) + 1
     let source = @sqlite.RangeWalSource::new(
       @sqlite.BytesSource::new(main),
-      @sqlite.BytesSource::new(wal),
+      WalBytesSource::{ data: wal, },
       tail_policy=UseValidPrefix,
       max_frames=frame_capacity,
       max_overlay_pages=frame_capacity,

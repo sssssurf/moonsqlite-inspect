@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import tempfile
 
+from wal_capture import capture_wal
 from wal_demo import HIGH_ROWID, WAL_PAGE_SIZE, make_capture
 
 
@@ -327,6 +328,10 @@ def wal_resize(directory):
         report = run("wal-rows", main, wal, str(revision), "samples")
         assert report["revision"]["page_count"] == counts[revision - 1]
         check_rows({**report, "page_size": 512, "page_count": counts[revision - 1]}, expected[revision])
+    series = run("wal-series", main, wal, "0", "3", "samples")
+    assert [entry["to"]["page_count"] for entry in series["entries"]] == counts
+    for revision, entry in enumerate(series["entries"], start=1):
+        assert entry == run("wal-changes", main, wal, str(revision - 1), str(revision), "samples")
 
 
 def read_varint(data, offset):
@@ -375,9 +380,14 @@ def compare_history(directory):
     demo = directory / "history"
     expected_rows, page_counts, wal_lengths = make_capture(demo)
     baseline, wal = demo / "baseline.sqlite", demo / "capture.wal"
+    manifest = demo / "capture.json"
     baseline_bytes, wal_bytes = baseline.read_bytes(), wal.read_bytes()
     last_frames = [0] + [(length - 32) // (WAL_PAGE_SIZE + 24) for length in wal_lengths[1:]]
     history = run("wal-history", baseline, wal)
+    assert run("wal-verify", baseline, wal, manifest) == {
+        "manifest_verified": True, "timeline": history,
+    }
+    assert run("wal-history", baseline, wal, "--manifest", manifest) == history
     assert history["page_size"] == WAL_PAGE_SIZE and history["committed_frames"] == last_frames[-1]
     assert history["valid_frames"] == last_frames[-1] and history["ignored_wal_bytes"] == 0
     assert history["stop_reason"] == "end_of_file" and int(history["stop_offset"]) == len(wal_bytes)
@@ -403,8 +413,10 @@ def compare_history(directory):
     assert int(actual_rows[3][HIGH_ROWID]["source"]["revision"]) == 3
     assert actual_rows[1][41]["source"]["frame"] != actual_rows[2][41]["source"]["frame"]
 
+    pairs = {}
     for before, after in ((0, 1), (1, 2), (0, 2), (2, 3), (3, 0), (3, 3)):
         report = run("wal-changes", baseline, wal, str(before), str(after), "status")
+        pairs[before, after] = report
         assert report["from"] == history["commits"][before] and report["to"] == history["commits"][after]
         old, new = ({row[0]: row[1:] for row in expected_rows[i]} for i in (before, after))
         expected = []
@@ -416,7 +428,23 @@ def compare_history(directory):
             elif old[key] != new[key]:
                 expected.append(dict(kind="changed", before=actual_rows[before][key], after=actual_rows[after][key]))
         assert report["entries"] == expected
-    assert run("wal-changes", baseline, wal, "0", "2", "status")["entries"] == []
+    assert pairs[0, 2]["entries"] == []
+    first = run("wal-series", baseline, wal, "0", "3", "status", "--limit", "2", "--manifest", manifest)
+    assert first == {
+        "from": 0, "through": 2, "requested_to": 3, "next_from": 2,
+        "entries": [pairs[0, 1], pairs[1, 2]],
+    }
+    last = run("wal-series", baseline, wal, str(first["next_from"]), "3", "status",
+               "--manifest", manifest, "--limit", "2")
+    assert last == {
+        "from": 2, "through": 3, "requested_to": 3, "next_from": None, "entries": [pairs[2, 3]],
+    }
+    empty_series = run("wal-series", baseline, wal, "3", "3", "status")
+    assert empty_series == {"from": 3, "through": 3, "requested_to": 3, "next_from": None, "entries": []}
+    run("wal-series", baseline, wal, "0", "4", "status", error="table definitions differ")
+    run("wal-series", baseline, wal, "0", "9", "status", "--limit", "1", error="revision 9 does not exist")
+    run("wal-series", baseline, wal, "3", "0", "status", error="first revision must be at most")
+    run("wal-series", baseline, wal, "0", "3", "status", "--limit", "1025", error="at most 1024")
     run("wal-changes", baseline, wal, "3", "4", "status", error="table definitions differ")
     run("wal-rows", baseline, wal, "4", "compact", error="Invalid")
     run("wal-rows", baseline, wal, "4", "missing", error="NotFound")
@@ -427,6 +455,144 @@ def compare_history(directory):
     empty.write_bytes(b"")
     assert run("wal-history", baseline, empty)["commits"] == history["commits"][:1]
     assert run("wal-rows", baseline, empty, "0", "status")["entries"] == list(actual_rows[0].values())
+
+
+def check_capture_manifest(directory):
+    live = directory / "capture-session.sqlite"
+    first, second = directory / "first-epoch", directory / "second-epoch"
+    empty = directory / "empty-capture"
+    occupied = directory / "occupied-capture"
+    occupied.mkdir()
+    (occupied / "capture.json").write_text("keep me", encoding="utf-8")
+    post_checkpoint = directory / "post-checkpoint.sqlite"
+    with closing(sqlite3.connect(live, timeout=0)) as db:
+        assert db.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        db.executescript("PRAGMA wal_autocheckpoint=7; CREATE TABLE items(note); INSERT INTO items VALUES ('abc');")
+        with capture_wal(db) as capture:
+            capture.export(empty)
+            db.execute("UPDATE items SET note='def'")
+            db.commit()
+            with closing(sqlite3.connect(live, timeout=0)) as other:
+                busy, frames, applied = other.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            assert busy == 1 and frames > 0 and applied == 0
+            capture.export(first)
+            try:
+                capture.export(occupied)
+            except FileExistsError:
+                assert [path.name for path in occupied.iterdir()] == ["capture.json"]
+                assert (occupied / "capture.json").read_text(encoding="utf-8") == "keep me"
+            else:
+                raise AssertionError("capture must preserve a pre-existing manifest")
+        assert db.execute("PRAGMA wal_autocheckpoint").fetchone()[0] == 7
+        assert db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone() == (0, 0, 0)
+        post_checkpoint.write_bytes(live.read_bytes())
+        with capture_wal(db) as capture:
+            db.execute("UPDATE items SET note='ghi'")
+            db.commit()
+            capture.export(second)
+
+    for bundle, revision_count in ((empty, 1), (first, 2), (second, 2)):
+        report = run("wal-verify", bundle / "baseline.sqlite", bundle / "capture.wal", bundle / "capture.json")
+        assert report["manifest_verified"] and len(report["timeline"]["commits"]) == revision_count
+    baseline, wal, manifest = (first / name for name in ("baseline.sqlite", "capture.wal", "capture.json"))
+    assert baseline.stat().st_size == post_checkpoint.stat().st_size
+    run("wal-history", post_checkpoint, wal, "--manifest", manifest, error="baseline SHA-256 mismatch")
+    replacement_wal = second / "capture.wal"
+    assert wal.stat().st_size == replacement_wal.stat().st_size
+    run("wal-verify", baseline, replacement_wal, manifest, error="WAL epoch mismatch")
+    corrupt_wal = directory / "edited-capture.wal"
+    edited = bytearray(wal.read_bytes())
+    edited[-1] ^= 1
+    corrupt_wal.write_bytes(edited)
+    run("wal-series", baseline, corrupt_wal, "0", "1", "items", "--manifest", manifest,
+        error="WAL SHA-256 mismatch")
+    corrupt_wal.write_bytes(edited[:-1])
+    run("wal-verify", baseline, corrupt_wal, manifest, error="WAL size mismatch")
+    invalid_manifest = directory / "duplicate-capture.json"
+    original = manifest.read_text(encoding="utf-8")
+    invalid_manifest.write_text('{"format":"moonsqlite-inspect.capture/1",' + original[1:], encoding="utf-8")
+    run("wal-verify", baseline, wal, invalid_manifest, error="Invalid capture manifest JSON")
+    swapped_order = json.loads(original)
+    swapped_order["capture_order"].reverse()
+    invalid_manifest.write_text(json.dumps(swapped_order), encoding="utf-8")
+    run("wal-verify", baseline, wal, invalid_manifest, error="Invalid capture manifest format or capture order")
+
+
+def check_series_overflow(directory):
+    live = directory / "overflow-series.sqlite"
+    output = directory / "overflow-series"
+    with closing(sqlite3.connect(live)) as db:
+        db.execute("PRAGMA page_size=512")
+        assert db.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        db.executescript("""
+            CREATE TABLE tracked(payload, label);
+            CREATE TABLE unrelated(value);
+            INSERT INTO tracked VALUES (zeroblob(4096), 'initial');
+            INSERT INTO unrelated VALUES (0);
+        """)
+        root = db.execute("SELECT rootpage FROM sqlite_schema WHERE name='tracked'").fetchone()[0]
+        query = "SELECT rowid, payload, label FROM tracked"
+        expected = [db.execute(query).fetchone()]
+        with capture_wal(db) as capture:
+            for revision in range(1, 9):
+                if revision == 6:
+                    if hasattr(db, "blobopen"):
+                        db.execute("BEGIN")
+                        with db.blobopen("tracked", "payload", 1) as blob:
+                            blob.seek(-1, 2)
+                            blob.write(b"\xab")
+                    else:
+                        db.execute("UPDATE tracked SET payload=?", (bytes(4095) + b"\xab",))
+                elif revision == 8:
+                    db.execute("UPDATE tracked SET label='changed'")
+                else:
+                    db.execute("UPDATE unrelated SET value=value+1")
+                db.commit()
+                expected.append(db.execute(query).fetchone())
+            capture.export(output)
+    baseline, wal, manifest = (output / name for name in ("baseline.sqlite", "capture.wal", "capture.json"))
+    result = run("wal-series", baseline, wal, "0", "8", "tracked", "--manifest", manifest)
+    assert [entry["to"]["revision"] for entry in result["entries"]] == list(range(1, 9))
+    assert result["next_from"] is None
+    for i, entry in enumerate(result["entries"]):
+        before, after = expected[i:i + 2]
+        if before == after:
+            assert entry["entries"] == []
+            continue
+        change, = entry["entries"]
+        assert change["kind"] == "changed"
+        for field, row in (("before", before), ("after", after)):
+            record = change[field]
+            assert (int(record["rowid"]), *(decoded(value) for value in record["values"])) == row
+    if hasattr(sqlite3.Connection, "blobopen"):
+        overflow_only = result["entries"][5]
+        data = wal.read_bytes()
+        frames = range(overflow_only["from"]["last_frame"], overflow_only["to"]["last_frame"])
+        offsets = [32 + index * (512 + 24) for index in frames]
+        assert offsets and root not in {int.from_bytes(data[offset:offset + 4], "big") for offset in offsets}
+        change, = overflow_only["entries"]
+        assert change["before"]["page"] == change["after"]["page"] == root
+        assert change["before"]["source"] == change["after"]["source"]
+
+
+def check_series_budget(directory):
+    output = directory / "large-series"
+    with closing(sqlite3.connect(directory / "large-series.sqlite")) as db:
+        assert db.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        db.execute("CREATE TABLE large_rows(payload)")
+        with capture_wal(db) as capture:
+            db.execute("INSERT INTO large_rows VALUES (zeroblob(2300000))")
+            db.commit()
+            db.execute("DELETE FROM large_rows")
+            db.commit()
+            db.execute("INSERT INTO large_rows VALUES (zeroblob(4194305))")
+            db.commit()
+            capture.export(output)
+    baseline, wal = output / "baseline.sqlite", output / "capture.wal"
+    run("wal-series", baseline, wal, "0", "2", "large_rows", error="8 MiB output budget")
+    small = run("wal-series", baseline, wal, "0", "2", "large_rows", "--limit", "1")
+    assert small["next_from"] == 1 and small["entries"][0]["entries"][0]["kind"] == "added"
+    run("wal-series", baseline, wal, "2", "3", "large_rows", error="8 MiB output budget")
 
 
 def compare_backups(directory):
@@ -463,9 +629,13 @@ def main():
         wal_capture(directory)
         wal_resize(directory)
         compare_history(directory)
+        check_capture_manifest(directory)
+        check_series_overflow(directory)
+        check_series_budget(directory)
         compare_backups(directory)
     print(f"SQLite {sqlite3.sqlite_version}: {total} legacy records matched across 3 page sizes and 3 encodings")
     print("SQLite WAL timeline: 5 revisions, 6 diff pairs, raw cell provenance, resize and invalid-tail cases passed")
+    print("WAL series and capture: pagination, overflow updates, response budget, pinned checkpoint and manifest mismatch cases passed")
 
 
 if __name__ == "__main__":

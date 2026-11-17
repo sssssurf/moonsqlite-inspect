@@ -40,6 +40,7 @@ pub struct WalTimeline {
   priv wal : Bytes
   priv revisions : Array[RevisionEntry]
   priv versions : Map[Int32, Array[PageVersion]]
+  priv frame_pages : Array[UInt32]
   page_size : Int32
   valid_frames : Int32
   committed_frames : Int32
@@ -161,7 +162,7 @@ pub fn open_wal_timeline(
     }
   }
   let log = @sqlite.inspect_wal_source(
-    @sqlite.BytesSource::new(wal),
+    WalBytesSource::{ data: wal, },
     max_frames~,
   ) catch {
     error => raise inspect_error(error)
@@ -183,6 +184,9 @@ pub fn open_wal_timeline(
     wal,
     revisions,
     versions,
+    frame_pages: Array::makei(log.committed_frames, i => {
+      log.frames[i].page_number
+    }),
     page_size: header.page_size,
     valid_frames: log.frames.length(),
     committed_frames: log.committed_frames,
@@ -284,7 +288,9 @@ impl @sqlite.RangeSource for RevisionView with fn read_range64(
     offset < 32L &&
     end > 28L
   if !replace_page_count && count <= self.timeline.page_size - in_page {
-    return self.read_page_slice(page, in_page, count).to_owned()
+    let span = self.read_page_slice(page, in_page, count)
+    let start = span.start_offset()
+    return range_bytes(span.data(), start, start + count)
   }
   let output : FixedArray[Byte] = FixedArray::make(count, 0)
   let mut copied = 0
@@ -323,17 +329,48 @@ pub fn WalTimeline::snapshot(
   self : WalTimeline,
   revision : Int32,
 ) -> WalRevision raise InspectError {
+  self.open_revision(self.revision_entry(revision), None)
+}
+
+///|
+fn WalTimeline::revision_entry(
+  self : WalTimeline,
+  revision : Int32,
+) -> RevisionEntry raise InspectError {
   guard revision >= 0 && revision < self.revisions.length() else {
     raise Invalid("WAL revision \{revision} does not exist")
   }
-  let entry = self.revisions[revision]
+  self.revisions[revision]
+}
+
+///|
+/// Return a revision's boundary and page count without opening its view.
+pub fn WalTimeline::commit(
+  self : WalTimeline,
+  revision : Int32,
+) -> WalCommit raise InspectError {
+  self.revision_entry(revision).info
+}
+
+///|
+fn WalTimeline::open_revision(
+  self : WalTimeline,
+  entry : RevisionEntry,
+  reads : Set[Int32]?,
+) -> WalRevision raise InspectError {
   let view : RevisionView = { timeline: self, entry, }
-  let database = @sqlite.open_range_source(view) catch {
+  let source : &@sqlite.RangeSource = match reads {
+    None => (view : &@sqlite.RangeSource)
+    Some(pages) => (TracedRevision::{ view, pages, } : &@sqlite.RangeSource)
+  }
+  let database = @sqlite.open_range_source(source) catch {
     error => raise inspect_error(error)
   }
   guard database.header().page_size == self.page_size &&
     database.page_count() == entry.info.page_count else {
-    raise Invalid("page 1 is inconsistent with WAL revision \{revision}")
+    raise Invalid(
+      "page 1 is inconsistent with WAL revision \{entry.info.revision}",
+    )
   }
   { view, database, info: entry.info, }
 }
