@@ -30,7 +30,10 @@
 | 公开仓库与开发记录 | `0.2.0` 加入历史视图，`0.3.0` 加入逐提交导出与采集清单，`0.3.2` 加入可复现的分发验证和历史编码矩阵。 [默认分支提交](https://github.com/sssssurf/moonsqlite-inspect/commits/main/) |
 | 安装、示例、核心测试与 CI | README 包含包安装与 CLI 运行示例。CI 运行四个后端、格式检查、SQLite 对照与独立分发包验证。覆盖原始 cell 来源、缩小再增长、仅溢出页更新、输出超限和错配清单。 [README](../README.md) · [CI](https://github.com/sssssurf/moonsqlite-inspect/actions/workflows/ci.yml) |
 | 许可与依赖来源 | 项目新增代码 Apache-2.0，上游同为 Apache-2.0，由 Mooncakes 安装。示例数据库由 SQLite 生成。 [项目许可](../LICENSE) · [上游许可](https://github.com/prowk/MoonSQLiteFile/blob/v0.8.1/LICENSE) |
-| Mooncakes 发布 | 模块 `sssssurf/moonsqlite-inspect@0.3.2`。`verify_distribution.py --registry` 从注册表安装并执行公开 API 测试。 [发布入口](https://mooncakes.io/docs/sssssurf/moonsqlite-inspect) |
+| 技术决策与 AI 辅助 | 代码、测试与文档使用 AI 辅助开发。页版本有效期、缩小后的页失效、二分选择页面和读事务保护采集顺序均有实现及对照检查。 [设计和边界](wal-timeline.md) · [SQLite 对照](../scripts/sqlite_oracle.py) |
+| Mooncakes 发布 | `sssssurf/moonsqlite-inspect@0.3.2` 已发布。独立工程从注册表安装后，JS、native、Wasm、Wasm GC 各通过三个公开 API 测试。 [发布入口](https://mooncakes.io/docs/sssssurf/moonsqlite-inspect) |
+
+发布源码在 MoonBit 0.10.21、Node.js 24 的线上环境通过完整 CI，覆盖检查、构建、四后端测试、SQLite 对照与独立分发包消费。`0.3.2` 同时修复了新版标准库参数名及格式器兼容问题，保留命令行的十进制输入约定。 [发布源码](https://github.com/sssssurf/moonsqlite-inspect/tree/2bdbbd405bb79f8a81a503b98ff7c185ac3375e6) · [代码 CI](https://github.com/sssssurf/moonsqlite-inspect/actions/runs/44263396599)
 
 ### 重现验收检查
 
