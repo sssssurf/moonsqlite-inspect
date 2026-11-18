@@ -27,10 +27,10 @@
 | 验收项 | 证据或状态 |
 | --- | --- |
 | MoonBit 实现与实质贡献 | `timeline.mbt` 实现页版本索引和历史视图，`history_rows.mbt` 实现行级对比与来源，`series.mbt` 复用同一索引导出连续提交。受控采集脚本持有基线读事务并生成 SHA-256 清单。 [页版本索引](../timeline.mbt) · [批量导出](../series.mbt) · [采集脚本](../scripts/wal_capture.py) |
-| 公开仓库与开发记录 | `0.2.0` 加入历史视图，`0.3.0` 加入逐提交导出与采集清单，`0.3.1` 加入可复现的分发验证和历史编码矩阵。 [默认分支提交](https://github.com/sssssurf/moonsqlite-inspect/commits/main/) |
+| 公开仓库与开发记录 | `0.2.0` 加入历史视图，`0.3.0` 加入逐提交导出与采集清单，`0.3.2` 加入可复现的分发验证和历史编码矩阵。 [默认分支提交](https://github.com/sssssurf/moonsqlite-inspect/commits/main/) |
 | 安装、示例、核心测试与 CI | README 包含包安装与 CLI 运行示例。CI 运行四个后端、格式检查、SQLite 对照与独立分发包验证。覆盖原始 cell 来源、缩小再增长、仅溢出页更新、输出超限和错配清单。 [README](../README.md) · [CI](https://github.com/sssssurf/moonsqlite-inspect/actions/workflows/ci.yml) |
 | 许可与依赖来源 | 项目新增代码 Apache-2.0，上游同为 Apache-2.0，由 Mooncakes 安装。示例数据库由 SQLite 生成。 [项目许可](../LICENSE) · [上游许可](https://github.com/prowk/MoonSQLiteFile/blob/v0.8.1/LICENSE) |
-| Mooncakes 发布 | `0.3.1` 已通过分发包独立消费测试。公开发布与注册表安装验证正在完成 |
+| Mooncakes 发布 | 模块 `sssssurf/moonsqlite-inspect@0.3.2`。`verify_distribution.py --registry` 从注册表安装并执行公开 API 测试。 [发布入口](https://mooncakes.io/docs/sssssurf/moonsqlite-inspect) |
 
 ### 重现验收检查
 
@@ -46,7 +46,7 @@ python -B scripts/verify_distribution.py
 
 `sqlite_oracle.py` 使用 SQLite 生成数据并查询结果，核对 6,012 条基础读取记录，另检查历史快照、批次续传、BLOB 溢出、回收后再增长和损坏尾部。历史路径在三种页大小和三种文本编码的九种组合下逐版本、逐比较核对。`verify_distribution.py` 解压实际分发包，在新工程中运行三个公开 API 测试，覆盖四个后端，并验证访问顺序、主动停止和错误边界。
 
-使用 `python -B scripts/verify_distribution.py --registry --version 0.3.1` 从 Mooncakes 安装发布版本后执行同一组公开 API 检查。
+使用 `python -B scripts/verify_distribution.py --registry --version 0.3.2` 从 Mooncakes 安装发布版本后执行同一组公开 API 检查。
 
 ### 性能与边界
 

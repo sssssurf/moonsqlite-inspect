@@ -1,6 +1,6 @@
 ///|
 fn parse_revision(value : String) -> Int32 raise CliError {
-  let revision = @string.parse_int(value, base=10) catch {
+  let revision = @string.parse_int(decimal_input(value)) catch {
     _ =>
       raise CliError(
         "Expected a nonnegative revision, got \{Json(value).stringify()}",

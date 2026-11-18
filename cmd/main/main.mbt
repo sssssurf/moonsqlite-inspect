@@ -69,8 +69,20 @@ fn wal_option(options : ArrayView[String]) -> String? raise CliError {
 }
 
 ///|
+fn decimal_input(value : String) -> StringView raise CliError {
+  let unsigned = match value[:] {
+    ['+' | '-', .. rest] => rest
+    rest => rest
+  }
+  guard !(unsigned is ['0', 'x' | 'X' | 'o' | 'O' | 'b' | 'B', ..]) else {
+    raise CliError("Expected a decimal integer")
+  }
+  value[:]
+}
+
+///|
 fn parse_rowid(value : String) -> Int64 raise CliError {
-  @string.parse_int64(value, base=10) catch {
+  @string.parse_int64(decimal_input(value)) catch {
     _ =>
       raise CliError(
         "Expected a signed 64-bit decimal rowid, got \{Json(value).stringify()}",
@@ -83,7 +95,7 @@ fn parse_limit(
   value : String,
   label~ : String = "row limit",
 ) -> Int32 raise CliError {
-  let limit = @string.parse_int(value, base=10) catch {
+  let limit = @string.parse_int(decimal_input(value)) catch {
     _ =>
       raise CliError(
         "Expected a positive 32-bit decimal \{label}, got \{Json(value).stringify()}",

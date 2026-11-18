@@ -186,6 +186,8 @@ def check_rowid_lookup(directory):
             (key, bytes(range(256)) * 12 if key == 0 else ("记录" * 25 + str(key))) for key in keys
         ])
         db.commit()
+        check_rows(run("row", database, "items", "+0000"),
+                   db.execute("SELECT rowid, payload FROM items WHERE rowid=0").fetchall())
         for key in (lowest, -1200, -2, 0, 998, beyond_js_integer, highest, -1, 1, highest - 1):
             expected = db.execute("SELECT rowid, payload FROM items WHERE rowid=?", (key,)).fetchall()
             check_rows(run("row", database, "items", str(key)), expected)
@@ -207,8 +209,11 @@ def check_rowid_lookup(directory):
     run("row", database, "missing", "1", error="NotFound")
     run("row", database, "items", str(highest + 1), error="64-bit decimal rowid")
     run("row", database, "items", str(lowest - 1), error="64-bit decimal rowid")
+    for key in ("0x0", "-0X1", "0b10", "+0o2"):
+        run("row", database, "items", key, error="64-bit decimal rowid")
     run("range", database, "items", "1", "0", "1", error="first rowid must be at most")
     run("range", database, "items", "0", "1", "0", error="row limit must be positive")
+    run("range", database, "items", "0", "1", "0x1", error="decimal row limit")
 
     raw = bytearray(database.read_bytes())
     root = (root_page - 1) * 512
@@ -449,6 +454,7 @@ def compare_history(directory):
     run("wal-rows", baseline, wal, "4", "compact", error="Invalid")
     run("wal-rows", baseline, wal, "4", "missing", error="NotFound")
     run("wal-rows", baseline, wal, "-1", "status", error="must be nonnegative")
+    run("wal-rows", baseline, wal, "0o1", "status", error="Expected a nonnegative revision")
     assert baseline.read_bytes() == baseline_bytes and wal.read_bytes() == wal_bytes
 
     empty = directory / "empty.wal"
