@@ -2,6 +2,36 @@
 
 Open and compare committed versions of an offline SQLite database. Given a checkpointed baseline and the WAL written after it, MoonSQLite Inspect can read an earlier revision, compare two revisions by rowid and trace each reported cell to its page in the baseline or to a specific WAL frame. The history index and row comparisons are implemented in MoonBit and use MoonSQLiteFile for WAL verification and record decoding. The CLI uses Node.js for file input and hashing. [MoonSQLiteFile](https://mooncakes.io/docs/prowk/moonsqlitefile)
 
+## Install the library
+
+Add the module to an existing MoonBit project.
+
+```sh
+moon add sssssurf/moonsqlite-inspect@0.3.1
+```
+
+Import the package in that project's `moon.pkg`.
+
+```moonbit
+import {
+  "sssssurf/moonsqlite-inspect" @inspect,
+}
+```
+
+Use the checkpointed baseline and WAL bytes from the capture workflow below.
+
+```moonbit
+fn first_commit_changes(
+  base : Bytes,
+  wal : Bytes,
+) -> Array[@inspect.VersionedChange] raise @inspect.InspectError {
+  let history = @inspect.open_wal_timeline(base, wal)
+  @inspect.diff_revisions(history.snapshot(0), history.snapshot(1), "status")
+}
+```
+
+The library builds on JS, native, Wasm and Wasm GC. JS shares read-only frame slices with the upstream validator. The other targets copy the requested frame bytes. The CLI entry point is supported on JS with Node.js 24. [Mooncakes package](https://mooncakes.io/docs/sssssurf/moonsqlite-inspect)
+
 ## Reproduce a WAL history
 
 Run the following commands from the repository root with MoonBit, Node.js and Python 3.10 or later. Python's SQLite extension generates the demonstration capture. Use a fresh output directory to regenerate it.
@@ -55,10 +85,18 @@ The reader supports UTF-8, UTF-16LE and UTF-16BE databases with SQLite page size
 ```sh
 moon test --target js --frozen
 moon build --target js --frozen
-python scripts/sqlite_oracle.py
+python -B scripts/sqlite_oracle.py
+python -B scripts/verify_distribution.py
 ```
 
-The oracle checks 6,012 legacy table, index and `WITHOUT ROWID` records across three page sizes and three encodings. It compares signed rowid lookups, pagination and differences with SQLite queries and checks page provenance against raw cell bytes. WAL coverage includes truncation and regrowth, partially written tails, uncommitted frames, batch continuation, overflow-only updates, output limits and rejection of mismatched capture files. [SQLite file format](https://sqlite.org/fileformat2.html)
+The oracle checks 6,012 legacy table, index and `WITHOUT ROWID` records across three page sizes and three encodings. It compares signed rowid lookups, pagination and differences with SQLite queries and checks page provenance against raw cell bytes. WAL coverage includes historical reads and adjacent changes for all nine encoding/page-size combinations, truncation and regrowth, partially written tails, uncommitted frames, batch continuation, overflow-only updates, output limits and rejection of mismatched capture files. [SQLite file format](https://sqlite.org/fileformat2.html)
+
+`verify_distribution.py` unpacks the current distribution and uses it in a separate consumer project. Three public API tests run on each of the four backends. They check snapshot reads, changes that are later reversed, signed 64-bit rowids, event order, cancellation, budgets and schema mismatch errors. To verify the published release using a new registry installation, update the index and run the registry mode.
+
+```sh
+moon update
+python -B scripts/verify_distribution.py --registry --version 0.3.1
+```
 
 After building the CLI, `python -B scripts/benchmark.py` measures latest WAL loading, backup comparison and point lookup. Add `--history` to measure indexing 12,000 commits and `--compare-export` to compare full exports of an 8,000-row BLOB table. Pass `--baseline /path/to/main.js` to run the paired cases against an earlier build. The benchmark checks matching results before reporting times.
 

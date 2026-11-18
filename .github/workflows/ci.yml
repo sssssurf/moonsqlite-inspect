@@ -25,4 +25,4 @@ jobs:
           done
           moon fmt --check
           python3 -B scripts/sqlite_oracle.py
-          moon package --frozen
+          python3 -B scripts/verify_distribution.py

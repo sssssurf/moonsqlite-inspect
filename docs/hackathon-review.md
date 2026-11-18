@@ -1,10 +1,12 @@
-# MoonBit 十一月黑客松复审与验收对照
+# MoonBit 十一月黑客松验收对照
+
+项目已通过报名初审，依据参赛者于 2026-11-18 提供的组委会通知。交付范围为 SQLite WAL 提交历史、行级差异和受控离线采集。本文件记录实现、发布与复现证据。
 
 ## 初审要求
 
 十一月官网将报名和资格审核列为两个阶段。报名需要公开仓库和一页项目说明，未通过可修改原表，审核滚动进行。章程第 4.1 节要求先查 Mooncakes，存在功能高度重合的成熟实现时优先考虑复用、维护、扩展或协作。仍采用独立项目时，申报书需解释具体缺口与独立实现理由。 [十一月赛事页](https://moonbitlang.github.io/Hackathon2026/#process) · [赛事章程](https://bxup9uklfcb.feishu.cn/wiki/Dx4Bwd6D1i3GfHkajQCcF7SznEd)
 
-章程第 5.1 节列出项目名称、介绍、方向与通用性、至少三个完整使用场景、核心范围、原创或参考方式、上游出处及许可证，以及公开 GitHub 仓库和至少十个有效提交。项目说明应由参赛者亲自撰写，体现问题、方案及边界。十一月官网的报名和验收日期以官方通知为准。已收到的初审邮件给出的 `2026-11-30` 是修改本项目报名材料的期限。 [赛事章程](https://bxup9uklfcb.feishu.cn/wiki/Dx4Bwd6D1i3GfHkajQCcF7SznEd)
+章程第 5.1 节列出项目名称、介绍、方向与通用性、至少三个完整使用场景、核心范围、原创或参考方式、上游出处及许可证，以及公开 GitHub 仓库和至少十个有效提交。十一月官网的最终验收日期以官方通知为准。 [赛事章程](https://bxup9uklfcb.feishu.cn/wiki/Dx4Bwd6D1i3GfHkajQCcF7SznEd)
 
 ## 生态项目对照
 
@@ -25,10 +27,26 @@
 | 验收项 | 证据或状态 |
 | --- | --- |
 | MoonBit 实现与实质贡献 | `timeline.mbt` 实现页版本索引和历史视图，`history_rows.mbt` 实现行级对比与来源，`series.mbt` 复用同一索引导出连续提交。受控采集脚本持有基线读事务并生成 SHA-256 清单。 [页版本索引](../timeline.mbt) · [批量导出](../series.mbt) · [采集脚本](../scripts/wal_capture.py) |
-| 公开仓库与开发记录 | `0.2.0` 加入历史视图，`0.3.0` 加入逐提交导出、采集清单验证和 JS 读取优化。 [默认分支提交](https://github.com/sssssurf/moonsqlite-inspect/commits/main/) |
-| 安装、示例、核心测试与 CI | README 提供从源码构建与复现命令。CI 运行四个 MoonBit 后端、格式检查、SQLite 对照与打包。测试覆盖原始 cell 来源、缩小再增长、全部历史批次与逐对结果、仅溢出页更新、输出上限和错配清单。 [README](../README.md) · [CI](https://github.com/sssssurf/moonsqlite-inspect/actions/workflows/ci.yml) |
+| 公开仓库与开发记录 | `0.2.0` 加入历史视图，`0.3.0` 加入逐提交导出与采集清单，`0.3.1` 加入可复现的分发验证和历史编码矩阵。 [默认分支提交](https://github.com/sssssurf/moonsqlite-inspect/commits/main/) |
+| 安装、示例、核心测试与 CI | README 包含包安装与 CLI 运行示例。CI 运行四个后端、格式检查、SQLite 对照与独立分发包验证。覆盖原始 cell 来源、缩小再增长、仅溢出页更新、输出超限和错配清单。 [README](../README.md) · [CI](https://github.com/sssssurf/moonsqlite-inspect/actions/workflows/ci.yml) |
 | 许可与依赖来源 | 项目新增代码 Apache-2.0，上游同为 Apache-2.0，由 Mooncakes 安装。示例数据库由 SQLite 生成。 [项目许可](../LICENSE) · [上游许可](https://github.com/prowk/MoonSQLiteFile/blob/v0.8.1/LICENSE) |
-| Mooncakes 发布 | `0.3.0` 已生成本地分发包。Mooncakes 公开发布和从注册表安装复验待完成 |
+| Mooncakes 发布 | `0.3.1` 已通过分发包独立消费测试。公开发布与注册表安装验证正在完成 |
+
+### 重现验收检查
+
+```sh
+moon update
+moon check --target all --deny-warn
+moon build --target all --frozen --deny-warn
+moon test --target all --frozen --deny-warn
+moon fmt --check
+python -B scripts/sqlite_oracle.py
+python -B scripts/verify_distribution.py
+```
+
+`sqlite_oracle.py` 使用 SQLite 生成数据并查询结果，核对 6,012 条基础读取记录，另检查历史快照、批次续传、BLOB 溢出、回收后再增长和损坏尾部。历史路径在三种页大小和三种文本编码的九种组合下逐版本、逐比较核对。`verify_distribution.py` 解压实际分发包，在新工程中运行三个公开 API 测试，覆盖四个后端，并验证访问顺序、主动停止和错误边界。
+
+使用 `python -B scripts/verify_distribution.py --registry --version 0.3.1` 从 Mooncakes 安装发布版本后执行同一组公开 API 检查。
 
 ### 性能与边界
 

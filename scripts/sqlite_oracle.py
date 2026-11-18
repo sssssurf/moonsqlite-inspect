@@ -595,6 +595,58 @@ def check_series_budget(directory):
     run("wal-series", baseline, wal, "2", "3", "large_rows", error="8 MiB output budget")
 
 
+def check_history_encodings(directory):
+    for page_size, encoding in product((512, 4096, 65536), ("UTF-8", "UTF-16le", "UTF-16be")):
+        bundle = directory / f"history-{page_size}-{encoding}"
+        live = directory / f"history-{page_size}-{encoding}.sqlite"
+        with closing(sqlite3.connect(live)) as db:
+            db.execute(f"PRAGMA page_size={page_size}")
+            db.execute(f"PRAGMA encoding='{encoding}'")
+            assert db.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+            db.execute("CREATE TABLE items(label, payload)")
+            payload = bytes(range(256)) * (page_size // 256 + 2)
+            db.execute("INSERT INTO items(rowid, label, payload) VALUES (?, ?, ?)",
+                       (-(2**63), "\ufeff原始🙂\x00", payload))
+            db.commit()
+            query = "SELECT rowid, label, payload FROM items ORDER BY rowid"
+            expected = [db.execute(query).fetchall()]
+            sizes = [db.execute("PRAGMA page_count").fetchone()[0]]
+            with capture_wal(db) as capture:
+                db.execute("UPDATE items SET label=?", ("\ufeff更新中🙂\x00",))
+                db.commit()
+                expected.append(db.execute(query).fetchall())
+                sizes.append(db.execute("PRAGMA page_count").fetchone()[0])
+                db.execute("UPDATE items SET payload=?", (payload[:-1] + b"\x00",))
+                db.commit()
+                expected.append(db.execute(query).fetchall())
+                sizes.append(db.execute("PRAGMA page_count").fetchone()[0])
+                db.execute("INSERT INTO items(rowid, label, payload) VALUES (?, ?, ?)",
+                           (2**63 - 1, "新记录", b""))
+                db.commit()
+                expected.append(db.execute(query).fetchall())
+                sizes.append(db.execute("PRAGMA page_count").fetchone()[0])
+                capture.export(bundle)
+        baseline, wal, manifest = (bundle / name for name in ("baseline.sqlite", "capture.wal", "capture.json"))
+        history = run("wal-verify", baseline, wal, manifest)["timeline"]
+        assert len(history["commits"]) == 4 and history["page_size"] == page_size
+        rows_by_revision = []
+        for revision in range(4):
+            report = run("wal-rows", baseline, wal, str(revision), "items")
+            check_rows({**report, "page_size": page_size, "page_count": sizes[revision]}, expected[revision])
+            rows_by_revision.append(report["entries"])
+        series = run("wal-series", baseline, wal, "0", "3", "items", "--manifest", manifest)
+        for revision, pair in enumerate(series["entries"], start=1):
+            change, = pair["entries"]
+            if revision < 3:
+                assert change == {
+                    "kind": "changed",
+                    "before": rows_by_revision[revision - 1][0],
+                    "after": rows_by_revision[revision][0],
+                }
+            else:
+                assert change == {"kind": "added", "after": rows_by_revision[revision][1]}
+
+
 def compare_backups(directory):
     before = directory / "before.sqlite"
     after = directory / "after.sqlite"
@@ -632,10 +684,12 @@ def main():
         check_capture_manifest(directory)
         check_series_overflow(directory)
         check_series_budget(directory)
+        check_history_encodings(directory)
         compare_backups(directory)
     print(f"SQLite {sqlite3.sqlite_version}: {total} legacy records matched across 3 page sizes and 3 encodings")
     print("SQLite WAL timeline: 5 revisions, 6 diff pairs, raw cell provenance, resize and invalid-tail cases passed")
     print("WAL series and capture: pagination, overflow updates, response budget, pinned checkpoint and manifest mismatch cases passed")
+    print("Historical snapshots and adjacent changes: all 9 page-size and text-encoding combinations matched SQLite")
 
 
 if __name__ == "__main__":
