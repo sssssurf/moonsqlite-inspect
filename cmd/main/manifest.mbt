@@ -62,10 +62,8 @@ fn verify_manifest(
   }
   guard parsed is Object(fields) &&
     fields.get("format") is Some(String("moonsqlite-inspect.capture/1")) &&
-    fields.get("capture_order")
-    is Some(
-      Array([String("checkpointed_baseline"), String("wal_after_commits")])
-    ) &&
+    fields.get("capture_order") ==
+    Some(Json(["checkpointed_baseline", "wal_after_commits"])) &&
     fields.get("baseline") is Some(base_claim) &&
     fields.get("wal") is Some(wal_claim) &&
     wal_claim is Object(wal_fields) &&
