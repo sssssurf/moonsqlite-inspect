@@ -98,16 +98,36 @@ fn RevisionCursor::next(
 }
 
 ///|
+/// Visit stored rows in signed rowid order, with their cell origins.
+/// Return false from emit to stop before reading another record. The result is
+/// true only when the scan reaches its end; errors may follow earlier callbacks.
+pub fn WalRevision::visit_table(
+  self : WalRevision,
+  name : String,
+  emit : (VersionedRow) -> Bool,
+) -> Bool raise InspectError {
+  let cursor = self.table_cursor(self.table_entry(name).root_page)
+  while cursor.next() is Some(row) {
+    if !emit(row) {
+      return false
+    }
+  }
+  true
+}
+
+///|
 /// Read the stored records of a rowid table in this revision, with cell origins.
 pub fn WalRevision::scan_table(
   self : WalRevision,
   name : String,
 ) -> Array[VersionedRow] raise InspectError {
-  let cursor = self.table_cursor(self.table_entry(name).root_page)
   let rows = []
-  while cursor.next() is Some(row) {
-    rows.push(row)
-  }
+  ignore(
+    self.visit_table(name, row => {
+      rows.push(row)
+      true
+    }),
+  )
   rows
 }
 
@@ -119,16 +139,34 @@ pub fn diff_revisions(
   after : WalRevision,
   name : String,
 ) -> Array[VersionedChange] raise InspectError {
-  let before_entry = before.table_entry(name)
-  let after_entry = after.table_entry(name)
   let changes = []
   ignore(
-    visit_revision_pair(before, before_entry, after, after_entry, change => {
+    visit_revision_changes(before, after, name, change => {
       changes.push(change)
       true
     }),
   )
   changes
+}
+
+///|
+/// Visit differences between any two historical views, in signed rowid order.
+/// Both endpoints must have the same stored table definition. Returning false
+/// stops the comparison immediately. A true result means both scans completed;
+/// errors may follow earlier callbacks, so consumers must handle partial work.
+pub fn visit_revision_changes(
+  before : WalRevision,
+  after : WalRevision,
+  name : String,
+  emit : (VersionedChange) -> Bool,
+) -> Bool raise InspectError {
+  visit_revision_pair(
+    before,
+    before.table_entry(name),
+    after,
+    after.table_entry(name),
+    emit,
+  )
 }
 
 ///|

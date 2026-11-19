@@ -7,7 +7,7 @@ Open and compare committed versions of an offline SQLite database. Given a check
 Add the module to an existing MoonBit project.
 
 ```sh
-moon add sssssurf/moonsqlite-inspect@0.3.2
+moon add sssssurf/moonsqlite-inspect@0.4.0
 ```
 
 Import the package in that project's `moon.pkg`.
@@ -51,11 +51,13 @@ node _build/js/debug/build/cmd/main/main.js wal-series _build/wal-demo/baseline.
 
 The demo creates four SQLite commits. Revision 0 is the baseline. Row 41 changes from `ready` to `waiting` in revision 1 and returns to `ready` in revision 2. The two adjacent comparisons each report one change. The comparison from 0 to 2 returns an empty `entries` array. Reported rows identify the cell's page payload offset and, for WAL pages, the frame and revision that supplied that page.
 
-`wal-series` compares every adjacent pair in the requested interval, including pairs with zero changes. Each invocation indexes the WAL once and returns up to 32 comparisons by default. Use `--limit` to request 1–1024 comparisons. The demo returns `next_from: 2`, so the next call uses `2 3 status`. A `null` continuation marks completion. Each response is limited to 8 MiB. If it exceeds the limit, retry with fewer comparisons or use the library's row visitor for a large individual comparison. Revision 4 in the demo changes the table definition, so the series stops at revision 3.
+`wal-series` compares every adjacent pair in the requested interval, including pairs with zero changes. Each invocation indexes the WAL once and returns up to 32 comparisons by default. Use `--limit` to request 1–1024 comparisons. The demo returns `next_from: 2`, so the next call uses `2 3 status`. A `null` continuation marks completion. Revision 4 in the demo changes the table definition, so the series stops at revision 3.
+
+`wal-rows`, `wal-changes` and `wal-series` each return at most 8 MiB of UTF-8 JSON, including the final newline. They process records incrementally and return an error with empty standard output if the document exceeds that budget or a later record is invalid. Reduce the series `--limit` or use the library visitors below for larger results. The limit applies to the response size; record decoding and the shared history index also use memory.
 
 `wal-verify` checks file sizes, SHA-256 digests and the WAL epoch against `capture.json`, then reports the validated timeline. Provide `--manifest FILE` to apply the same check before any history read or comparison. To make your own bundle, use the capture helper with a SQLite writer you control. It keeps a read transaction open from the checkpointed baseline through export. The CLI accepts up to 64 MiB per database or WAL file. Use the latest-snapshot commands below for a consistent same-time database/WAL pair. [Capture and snapshot details](docs/wal-timeline.md)
 
-From MoonBit, open the capture once with `open_wal_timeline(base, wal)`. Use `commits()` to list revisions, `snapshot(revision)` to read stored rows and `diff_revisions(before, after, name)` for a pair with matching table definitions. `visit_adjacent_changes` emits ordered changes and completion events one comparison at a time. `page_origin(page)` gives the underlying byte location of a logical page.
+From MoonBit, open the capture once with `open_wal_timeline(base, wal)`. Use `commits()` to list revisions, `snapshot(revision)` to read stored rows and `diff_revisions(before, after, name)` for a pair with matching table definitions. `WalRevision::visit_table` visits rows without collecting the table, and `visit_revision_changes` visits changes between any two supported views, including reverse comparisons. Return `false` to stop before reading another record. A `true` result means the scan completed; an error can follow earlier callbacks. The array-returning APIs remain available. `visit_adjacent_changes` emits ordered changes and completion events one comparison at a time. `page_origin(page)` gives the underlying byte location of a logical page. [Visitor examples](docs/wal-timeline.md#visit-historical-rows-and-arbitrary-pairs)
 
 ## Inspect a backup or the latest snapshot
 
@@ -86,16 +88,19 @@ The reader supports UTF-8, UTF-16LE and UTF-16BE databases with SQLite page size
 moon test --target js --frozen
 moon build --target js --frozen
 python -B scripts/sqlite_oracle.py
+python -B scripts/history_stress.py
 python -B scripts/verify_distribution.py
 ```
 
 The oracle checks 6,012 legacy table, index and `WITHOUT ROWID` records across three page sizes and three encodings. It compares signed rowid lookups, pagination and differences with SQLite queries and checks page provenance against raw cell bytes. WAL coverage includes historical reads and adjacent changes for all nine encoding/page-size combinations, truncation and regrowth, partially written tails, uncommitted frames, batch continuation, overflow-only updates, output limits and rejection of mismatched capture files. [SQLite file format](https://sqlite.org/fileformat2.html)
 
-`verify_distribution.py` unpacks the current distribution and uses it in a separate consumer project. Three public API tests run on each of the four backends. They check snapshot reads, changes that are later reversed, signed 64-bit rowids, event order, cancellation, budgets and schema mismatch errors. To verify the published release using a new registry installation, update the index and run the registry mode.
+`history_stress.py` uses two fixed seeds and two page sizes to generate four captures with 24 commits each. It compares 100 historical snapshots and 120 adjacent, nonadjacent, reverse or identical-endpoint comparisons with SQLite queries, and checks cell origins against raw frame bytes. The workload includes multi-page tables, index updates, overflow payloads, growth, vacuum shrink and regrowth, savepoint and transaction rollback, and writes to an unrelated table.
+
+`verify_distribution.py` unpacks the current distribution and uses it in a separate consumer project. Five public API tests run on each of the four backends. They check snapshot reads, changes that are later reversed, signed 64-bit rowids, event order, cancellation, budgets and schema mismatch errors. A damaged later record verifies that row and pair visitors stop before decoding it when the consumer cancels, while a full traversal rejects it. To verify the published release using a new registry installation, update the index and run the registry mode.
 
 ```sh
 moon update
-python -B scripts/verify_distribution.py --registry --version 0.3.2
+python -B scripts/verify_distribution.py --registry --version 0.4.0
 ```
 
 After building the CLI, `python -B scripts/benchmark.py` measures latest WAL loading, backup comparison and point lookup. Add `--history` to measure indexing 12,000 commits and `--compare-export` to compare full exports of an 8,000-row BLOB table. Pass `--baseline /path/to/main.js` to run the paired cases against an earlier build. The benchmark checks matching results before reporting times.

@@ -1,9 +1,11 @@
 """Verify a packaged or registry-installed module from a separate MoonBit project."""
 
 import argparse
+from contextlib import closing
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 from zipfile import ZipFile
@@ -25,6 +27,31 @@ def manifest_field(path, name):
 
 def fixture_literal(path):
     return 'b"' + "".join(f"\\x{byte:02x}" for byte in path.read_bytes()) + '"'
+
+
+def lazy_scan_fixtures(samples):
+    """A valid early row followed by a record that fails only when decoded."""
+    database = samples / "lazy.sqlite"
+    with closing(sqlite3.connect(database)) as connection:
+        connection.executescript("""
+            PRAGMA page_size=512;
+            CREATE TABLE items(value);
+            INSERT INTO items VALUES ('first'), ('second');
+        """)
+        root, = connection.execute("SELECT rootpage FROM sqlite_schema WHERE name='items'").fetchone()
+    original = database.read_bytes()
+    damaged = bytearray(original)
+    page = (root - 1) * 512
+    assert damaged[page] == 13
+    first, last = (page + int.from_bytes(damaged[page + slot:page + slot + 2], "big")
+                   for slot in (8, 10))
+    assert damaged[first:first + 4] == bytes((7, 1, 2, 23))
+    assert damaged[last:last + 4] == bytes((8, 2, 2, 25))
+    damaged[first + 4:first + 9] = b"alter"
+    damaged[last + 3] = 10  # Reserved SQLite serial type in the second row.
+    changed = samples / "lazy-damaged.sqlite"
+    changed.write_bytes(damaged)
+    return database, changed
 
 
 def consumer_source(samples):
@@ -97,6 +124,77 @@ test "installed visitor emits adjacent pairs and supports cancellation" {
 }
 
 ///|
+test "installed row and pair visitors support arbitrary endpoints and completion" {
+  let history = timeline()
+  let first = history.snapshot(0)
+  let last = history.snapshot(3)
+  let expected = last.scan_table("status")
+  let visited : Array[@inspect.VersionedRow] = []
+  assert_true(last.visit_table("status", row => {
+    visited.push(row)
+    true
+  }))
+  assert_eq(visited.length(), expected.length())
+  for index in 0..<expected.length() {
+    assert_eq(visited[index].row.rowid, expected[index].row.rowid)
+    assert_eq(visited[index].row.values, expected[index].row.values)
+  }
+  let rowids : Array[Int64] = []
+  assert_true(@inspect.visit_revision_changes(first, last, "status", change => {
+    match change {
+      Added(row) | Removed(row) | Changed(_, row) => rowids.push(row.row.rowid)
+    }
+    true
+  }))
+  assert_eq(rowids, [-9223372036854775808L, 9007199254740993L, 9223372036854775807L])
+  let mut calls = 0
+  assert_true(@inspect.visit_revision_changes(first, history.snapshot(2), "status", _ => {
+    calls += 1
+    true
+  }))
+  assert_eq(calls, 0)
+  assert_false(@inspect.visit_revision_changes(last, first, "status", _ => {
+    calls += 1
+    false
+  }))
+  assert_eq(calls, 1)
+}
+
+///|
+test "installed visitors stop before decoding a later damaged record" {
+  let first = @inspect.open_wal_timeline(LAZY_BYTES, b"").snapshot(0)
+  let damaged = @inspect.open_wal_timeline(DAMAGED_BYTES, b"").snapshot(0)
+  let rows : Array[@inspect.VersionedRow] = []
+  assert_false(damaged.visit_table("items", row => {
+    rows.push(row)
+    false
+  }))
+  assert_eq(rows.length(), 1)
+  assert_eq(rows[0].row.values, [@inspect.Value::Text("alter")])
+  let changes : Array[@inspect.VersionedChange] = []
+  assert_false(@inspect.visit_revision_changes(first, damaged, "items", change => {
+    changes.push(change)
+    false
+  }))
+  guard changes is [Changed(before, after)] else { fail("expected the early update") }
+  assert_eq(before.row.values, [@inspect.Value::Text("first")])
+  assert_eq(after.row.values, [@inspect.Value::Text("alter")])
+  let mut seen = 0
+  let rejected = try {
+    ignore(damaged.visit_table("items", _ => {
+      seen += 1
+      true
+    }))
+    false
+  } catch {
+    @inspect.InspectError::Invalid(_) => true
+    _ => false
+  }
+  assert_true(rejected)
+  assert_eq(seen, 1)
+}
+
+///|
 test "installed API rejects incomplete budgets and incompatible table definitions" {
   let exhausted = try {
     ignore(@inspect.open_wal_timeline(BASE_BYTES, WAL_BYTES, max_frames=1))
@@ -118,8 +216,10 @@ test "installed API rejects incomplete budgets and incompatible table definition
   assert_eq(@inspect.open_wal_timeline(BASE_BYTES, b"").commits().length(), 1)
 }
 '''
+    lazy, damaged = lazy_scan_fixtures(samples)
     return source.replace("BASE_BYTES", fixture_literal(samples / "baseline.sqlite")).replace(
-        "WAL_BYTES", fixture_literal(samples / "capture.wal"))
+        "WAL_BYTES", fixture_literal(samples / "capture.wal")).replace(
+        "LAZY_BYTES", fixture_literal(lazy)).replace("DAMAGED_BYTES", fixture_literal(damaged))
 
 
 def verify(registry, version):
@@ -167,7 +267,7 @@ def verify(registry, version):
             if manifest_field(installed, "version") != version:
                 raise RuntimeError("installed registry version differs from the requested release")
         mode = "registry" if registry else "packaged"
-        print(f"{module}@{version}: {mode} consumer passed 3 API tests on each of {', '.join(TARGETS)}")
+        print(f"{module}@{version}: {mode} consumer passed 5 API tests on each of {', '.join(TARGETS)}")
 
 
 if __name__ == "__main__":

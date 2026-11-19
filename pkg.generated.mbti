@@ -14,6 +14,8 @@ pub fn open_snapshot(Bytes, wal? : Bytes) -> Snapshot raise InspectError
 
 pub fn open_wal_timeline(Bytes, Bytes, max_frames? : Int32) -> WalTimeline raise InspectError
 
+pub fn visit_revision_changes(WalRevision, WalRevision, String, (VersionedChange) -> Bool) -> Bool raise InspectError
+
 // Errors
 pub suberror InspectError {
   Invalid(String)
@@ -127,6 +129,7 @@ pub struct WalRevision {
 }
 pub fn WalRevision::page_origin(Self, Int32) -> PageOrigin raise InspectError
 pub fn WalRevision::scan_table(Self, String) -> Array[VersionedRow] raise InspectError
+pub fn WalRevision::visit_table(Self, String, (VersionedRow) -> Bool) -> Bool raise InspectError
 
 pub struct WalTimeline {
   page_size : Int32

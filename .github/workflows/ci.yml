@@ -25,4 +25,5 @@ jobs:
           done
           moon fmt --check
           python3 -B scripts/sqlite_oracle.py
+          python3 -B scripts/history_stress.py
           python3 -B scripts/verify_distribution.py

@@ -66,17 +66,43 @@ fn versioned_change_json(change : @inspect.VersionedChange) -> Json {
 }
 
 ///|
-fn changes_json(
+fn changes_text(
   before : @inspect.WalRevision,
   after : @inspect.WalRevision,
   name : String,
-) -> Json raise @inspect.InspectError {
-  let changes = @inspect.diff_revisions(before, after, name).map(
-    versioned_change_json,
-  )
-  {
-    "from": commit_json(before.info),
-    "to": commit_json(after.info),
-    "entries": changes,
+) -> String raise {
+  let out = JsonOutput::new()
+  let mut first = true
+  let head = "{\"from\":\{commit_json(before.info).stringify()},\"to\":\{commit_json(after.info).stringify()},\"entries\":["
+  let complete = out.append(head) &&
+    @inspect.visit_revision_changes(before, after, name, change => {
+      let separator = first || out.append(",")
+      first = false
+      separator && out.append_change(change)
+    })
+  guard complete && out.append("]}") else {
+    raise CliError(
+      "WAL changes exceed the 8 MiB output budget; use visit_revision_changes",
+    )
   }
+  out.text.to_string()
+}
+
+///|
+fn rows_text(snapshot : @inspect.WalRevision, name : String) -> String raise {
+  let out = JsonOutput::new()
+  let mut first = true
+  let head = "{\"revision\":\{commit_json(snapshot.info).stringify()},\"entries\":["
+  let complete = out.append(head) &&
+    snapshot.visit_table(name, row => {
+      let separator = first || out.append(",")
+      first = false
+      separator && out.append_row(row)
+    })
+  guard complete && out.append("]}") else {
+    raise CliError(
+      "WAL rows exceed the 8 MiB output budget; use WalRevision::visit_table",
+    )
+  }
+  out.text.to_string()
 }

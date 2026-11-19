@@ -180,21 +180,6 @@ fn run(args : ArrayView[String]) -> Json raise {
       "timeline": history_json(load_timeline(base, wal, Some(manifest))),
     }
   }
-  if args is ["wal-rows", base, wal, revision, name, .. options] {
-    let number = parse_revision(revision)
-    let timeline = load_timeline(base, wal, manifest_option(options))
-    let snapshot = timeline.snapshot(number)
-    return {
-      "revision": commit_json(snapshot.info),
-      "entries": snapshot.scan_table(name).map(versioned_row_json),
-    }
-  }
-  if args is ["wal-changes", base, wal, before, after, name, .. options] {
-    let from = parse_revision(before)
-    let to = parse_revision(after)
-    let timeline = load_timeline(base, wal, manifest_option(options))
-    return changes_json(timeline.snapshot(from), timeline.snapshot(to), name)
-  }
   if args is ["diff", before, after, name] {
     return diff_json(
       @inspect.open_snapshot(load(before)),
@@ -297,6 +282,17 @@ fn run(args : ArrayView[String]) -> Json raise {
 ///|
 fn run_text(args : ArrayView[String]) -> String raise {
   match args {
+    ["wal-rows", base, wal, revision, name, .. options] => {
+      let number = parse_revision(revision)
+      let timeline = load_timeline(base, wal, manifest_option(options))
+      rows_text(timeline.snapshot(number), name)
+    }
+    ["wal-changes", base, wal, before, after, name, .. options] => {
+      let from = parse_revision(before)
+      let to = parse_revision(after)
+      let timeline = load_timeline(base, wal, manifest_option(options))
+      changes_text(timeline.snapshot(from), timeline.snapshot(to), name)
+    }
     ["wal-series", base, wal, from, to, name, .. options] => {
       let (limit, manifest) = series_options(options)
       let timeline = load_timeline(base, wal, manifest)

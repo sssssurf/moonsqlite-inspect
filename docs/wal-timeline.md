@@ -25,9 +25,30 @@ SQLite's frame checksums establish WAL continuity. The pinned read transaction e
 1. MoonSQLiteFile validates the baseline header and the WAL frame prefix. Its inspection API returns frame locations and complete commit boundaries. Revision 0 is the baseline. Each complete boundary in the prefix becomes one subsequent revision.
 2. An index records each page's WAL versions and which revision supersedes each version. When a commit truncates the database, a max-heap identifies overlay pages beyond the new end. A main-file page beyond that end also stops being usable as a fallback. Every new page after growth must be covered by the WAL before the commit is exposed.
 3. A read binary-searches the requested page's versions and resolves the latest version still visible at the chosen revision. It can then supply exact byte ranges to the upstream B-tree and overflow reader. The range view supplies the commit page count in a transient copy of the page 1 header. The input files and cell bytes stay intact.
-4. For a rowid table, two forward cursors compare full stored values by signed 64-bit rowid. Each JSON change carries the appropriate before and after records. The package materializes the changed records, while the cursors read pages and records as needed.
+4. For a rowid table, two forward cursors compare full stored values by signed 64-bit rowid. Each JSON change carries the appropriate before and after records. Visitors deliver one row or change at a time. The array-returning APIs collect those results when the caller needs them.
 
 The index stores metadata proportional to the number of validated frames and commits. Opening another revision reuses it. JSON for a row contains its cell page number and in-page offset. Adding the cell offset to `source.page_offset` locates the cell in the corresponding source. `source.revision` is the revision in which that page version was written. A transaction may write a page without changing a particular row on it. A row can span overflow pages whose origins differ from the cell origin.
+
+## Visit historical rows and arbitrary pairs
+
+`WalRevision::visit_table(name, emit)` visits stored rows in signed rowid order. `visit_revision_changes(before, after, name, emit)` uses the same merge as `diff_revisions`, including nonadjacent and reverse endpoints. Both return `true` only after reaching the end. Returning `false` from the callback stops immediately, without decoding another row, and makes the visitor return `false`.
+
+```moonbit
+let before = timeline.snapshot(0)
+let after = timeline.snapshot(3)
+let complete = @inspect.visit_revision_changes(before, after, "status", change => {
+  match change {
+    Added(row) => println("added \{row.row.rowid}")
+    Removed(row) => println("removed \{row.row.rowid}")
+    Changed(_, row) => println("changed \{row.row.rowid}")
+  }
+  true
+})
+```
+
+A callback can observe a valid prefix before a later read or decoding error. Consumers writing an artifact should stage their output and commit it only after a `true` result. Cancellation intentionally leaves later records unchecked. `scan_table` and `diff_revisions` collect the complete scan and raise if it fails.
+
+The CLI stages JSON for `wal-rows`, `wal-changes` and `wal-series` in a shared 8 MiB response budget, measured in UTF-8 bytes including the final newline. It checks BLOB expansion before hexadecimal encoding and accounts for JSON escapes when appending. Exceeding the limit or encountering a later invalid record returns exit code 2, a diagnostic on standard error and no standard output. Use the visitors for a larger individual result. Record, scan and input limits still apply.
 
 ## Export adjacent changes
 

@@ -22,6 +22,8 @@ def run(*args, error=None):
         assert process.returncode == 2 and error in process.stderr and not process.stdout, (args, process)
         return None
     assert process.returncode == 0, (args, process.stderr)
+    if args[0] in ("wal-rows", "wal-changes", "wal-series"):
+        assert len(process.stdout.encode("utf-8")) <= 8 * 1024 * 1024, "historical JSON exceeds its response budget"
     return json.loads(process.stdout)
 
 
@@ -154,6 +156,9 @@ def check_cell_boundaries(directory):
     changed.write_bytes(overlap)
     run("table", changed, "packed", error="record payload extends beyond its B-tree cell")
     run("diff", database, changed, "packed", error="record payload extends beyond its B-tree cell")
+    empty_wal = directory / "cell-layout.wal"
+    empty_wal.write_bytes(b"")
+    run("wal-rows", changed, empty_wal, "0", "packed", error="Invalid")
     damaged_rowid = original[start + 1]
     good_rowid = 3 - damaged_rowid
     good_value = b"\xaa" if good_rowid == 1 else b"\xbb"
@@ -593,12 +598,39 @@ def check_series_budget(directory):
             db.commit()
             db.execute("INSERT INTO large_rows VALUES (zeroblob(4194305))")
             db.commit()
+            db.execute("DELETE FROM large_rows")
+            db.executemany("INSERT INTO large_rows VALUES (zeroblob(2100000))", [(), ()])
+            db.commit()
+            db.execute("DELETE FROM large_rows")
+            db.execute("INSERT INTO large_rows VALUES (?)", ("\x00" * 1398102,))
+            db.commit()
+            db.execute("DELETE FROM large_rows")
+            db.execute("INSERT INTO large_rows VALUES (?)", ("中" * 2796203,))
+            db.commit()
             capture.export(output)
     baseline, wal = output / "baseline.sqlite", output / "capture.wal"
     run("wal-series", baseline, wal, "0", "2", "large_rows", error="8 MiB output budget")
     small = run("wal-series", baseline, wal, "0", "2", "large_rows", "--limit", "1")
     assert small["next_from"] == 1 and small["entries"][0]["entries"][0]["kind"] == "added"
     run("wal-series", baseline, wal, "2", "3", "large_rows", error="8 MiB output budget")
+    assert len(run("wal-rows", baseline, wal, "1", "large_rows")["entries"]) == 1
+    assert run("wal-changes", baseline, wal, "0", "1", "large_rows")["entries"][0]["kind"] == "added"
+    for revision in range(3, 7):
+        run("wal-rows", baseline, wal, str(revision), "large_rows", error="8 MiB output budget")
+        run("wal-changes", baseline, wal, "0", str(revision), "large_rows", error="8 MiB output budget")
+    run("wal-changes", baseline, wal, "3", "1", "large_rows", error="8 MiB output budget")
+    near_limit = directory / "near-limit"
+    with closing(sqlite3.connect(directory / "near-limit.sqlite")) as db:
+        assert db.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        db.execute("CREATE TABLE items(payload)")
+        with capture_wal(db) as capture:
+            db.execute("INSERT INTO items VALUES (zeroblob(4194000))")
+            db.commit()
+            capture.export(near_limit)
+    base, log = near_limit / "baseline.sqlite", near_limit / "capture.wal"
+    near_rows = run("wal-rows", base, log, "1", "items")
+    assert len(decoded(near_rows["entries"][0]["values"][0])) == 4194000
+    assert run("wal-changes", base, log, "0", "1", "items")["entries"][0]["kind"] == "added"
 
 
 def check_history_encodings(directory):
