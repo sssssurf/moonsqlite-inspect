@@ -12,7 +12,9 @@ pub impl Eq for Value with fn equal(self, other) {
   match (self, other) {
     (Null, Null) => true
     (Integer(left), Integer(right)) => left == right
-    (Real(left), Real(right)) => left == right
+    // Stored-value equality must be reflexive, including decoded IEEE NaNs.
+    (Real(left), Real(right)) =>
+      left == right || (left != left && right != right)
     (Text(left), Text(right)) => left == right
     (Blob(left), Blob(right)) => left == right
     _ => false

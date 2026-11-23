@@ -7,7 +7,7 @@ Open and compare committed versions of an offline SQLite database. Given a check
 Add the module to an existing MoonBit project.
 
 ```sh
-moon add sssssurf/moonsqlite-inspect@0.4.0
+moon add sssssurf/moonsqlite-inspect@0.4.1
 ```
 
 Import the package in that project's `moon.pkg`.
@@ -39,6 +39,7 @@ Run the following commands from the repository root with MoonBit, Node.js and Py
 ```sh
 moon update
 moon build --target js
+node _build/js/debug/build/cmd/main/main.js --help
 python scripts/wal_demo.py _build/wal-demo
 node _build/js/debug/build/cmd/main/main.js wal-verify _build/wal-demo/baseline.sqlite _build/wal-demo/capture.wal _build/wal-demo/capture.json
 node _build/js/debug/build/cmd/main/main.js wal-history _build/wal-demo/baseline.sqlite _build/wal-demo/capture.wal
@@ -82,6 +83,8 @@ The corresponding library methods are `Snapshot::find_row` and `Snapshot::scan_r
 
 The reader supports UTF-8, UTF-16LE and UTF-16BE databases with SQLite page sizes from 512 through 65,536 bytes. It validates cell boundaries, freeblock chains and rowid ranges in the B-trees it visits. It returns the SQLite storage classes and field order from each physical record. For an `INTEGER PRIMARY KEY` alias, the key appears in `rowid` and its stored column remains NULL. SQL projections and schema-derived defaults belong to the query layer. The library caps each decoded record at 16 MiB and the CLI caps each input file at 64 MiB.
 
+Stored REAL values use numeric equality. NaNs compare equal to other NaNs, and positive and negative zero compare equal. NaN payload bits are outside this value comparison. A raw serial-7 NaN remains a `Real` value here, while SQLite SQL reads it as NULL. A stored REAL-to-NULL or INTEGER-to-REAL change still appears in a diff. JSON encodes REALs as strings, including `NaN`, `Infinity` and `-Infinity`. [SQLite numeric representation](https://sqlite.org/floatingpoint.html)
+
 ## Reproduce verification
 
 ```sh
@@ -90,17 +93,18 @@ moon build --target js --frozen
 python -B scripts/sqlite_oracle.py
 python -B scripts/history_stress.py
 python -B scripts/verify_distribution.py
+python -B scripts/verify_readme.py
 ```
 
 The oracle checks 6,012 legacy table, index and `WITHOUT ROWID` records across three page sizes and three encodings. It compares signed rowid lookups, pagination and differences with SQLite queries and checks page provenance against raw cell bytes. WAL coverage includes historical reads and adjacent changes for all nine encoding/page-size combinations, truncation and regrowth, partially written tails, uncommitted frames, batch continuation, overflow-only updates, output limits and rejection of mismatched capture files. [SQLite file format](https://sqlite.org/fileformat2.html)
 
 `history_stress.py` uses two fixed seeds and two page sizes to generate four captures with 24 commits each. It compares 100 historical snapshots and 120 adjacent, nonadjacent, reverse or identical-endpoint comparisons with SQLite queries, and checks cell origins against raw frame bytes. The workload includes multi-page tables, index updates, overflow payloads, growth, vacuum shrink and regrowth, savepoint and transaction rollback, and writes to an unrelated table.
 
-`verify_distribution.py` unpacks the current distribution and uses it in a separate consumer project. Five public API tests run on each of the four backends. They check snapshot reads, changes that are later reversed, signed 64-bit rowids, event order, cancellation, budgets and schema mismatch errors. A damaged later record verifies that row and pair visitors stop before decoding it when the consumer cancels, while a full traversal rejects it. To verify the published release using a new registry installation, update the index and run the registry mode.
+`verify_distribution.py` unpacks the current distribution and uses it in a separate consumer project. Six public API tests run on each of the four backends. They check snapshot reads, changes that are later reversed, signed 64-bit rowids, event order, cancellation, budgets, schema mismatch errors and unchanged NaNs. A damaged later record verifies that row and pair visitors stop before decoding it when the consumer cancels, while a full traversal rejects it. `verify_readme.py` extracts the distribution into a clean directory, executes the commands in the README's history example and checks all seven JSON reports. To verify the published release using a new registry installation, update the index and run the registry mode.
 
 ```sh
 moon update
-python -B scripts/verify_distribution.py --registry --version 0.4.0
+python -B scripts/verify_distribution.py --registry --version 0.4.1
 ```
 
 After building the CLI, `python -B scripts/benchmark.py` measures latest WAL loading, backup comparison and point lookup. Add `--history` to measure indexing 12,000 commits and `--compare-export` to compare full exports of an 8,000-row BLOB table. Pass `--baseline /path/to/main.js` to run the paired cases against an earlier build. The benchmark checks matching results before reporting times.

@@ -32,6 +32,24 @@ test "a reserved serial type is rejected" {
 }
 
 ///|
+test "stored real comparisons are reflexive without hiding numeric or type changes" {
+  let quiet = Real(0x7ff8000000000001UL.reinterpret_as_double())
+  let signaling = Real(0x7ff0000000000001UL.reinterpret_as_double())
+  let negative = Real(0xfff8000000000002UL.reinterpret_as_double())
+  assert_eq(quiet, quiet)
+  assert_eq(quiet, signaling)
+  assert_eq(quiet, negative)
+  assert_true(quiet != Null && quiet != Real(1.0))
+  let infinity = Real(0x7ff0000000000000UL.reinterpret_as_double())
+  assert_eq(infinity, infinity)
+  assert_true(infinity != Real(0xfff0000000000000UL.reinterpret_as_double()))
+  assert_true(infinity != quiet)
+  assert_eq(Real(-0.0), Real(0.0))
+  assert_true(Real(0.0) != Integer(0L))
+  assert_true(Real(1.0) != Real(0x3ff0000000000001UL.reinterpret_as_double()))
+}
+
+///|
 test "UTF-16 record text preserves its leading BOM and supplementary characters" {
   let little = b"\x02\x1d\xff\xfe\x2d\x4e\x3d\xd8\x00\xde"
   let big = b"\x02\x1d\xfe\xff\x4e\x2d\xd8\x3d\xde\x00"

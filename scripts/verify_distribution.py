@@ -11,6 +11,7 @@ import tempfile
 from zipfile import ZipFile
 
 from wal_demo import make_capture
+from float_fixture import make_float_capture
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -215,8 +216,42 @@ test "installed API rejects incomplete budgets and incompatible table definition
   assert_true(incompatible)
   assert_eq(@inspect.open_wal_timeline(BASE_BYTES, b"").commits().length(), 1)
 }
+
+///|
+test "installed diff ignores unchanged NaNs and retains real value and storage-class changes" {
+  let history = @inspect.open_wal_timeline(FLOAT_BASE_BYTES, FLOAT_WAL_BYTES)
+  let base = @inspect.open_snapshot(FLOAT_BASE_BYTES)
+  assert_eq(@inspect.diff_table(base, base, "numbers").length(), 0)
+  assert_eq(history.commits().length(), 6)
+  assert_eq(@inspect.diff_revisions(history.snapshot(0), history.snapshot(0), "numbers").length(), 0)
+  assert_eq(@inspect.diff_revisions(history.snapshot(0), history.snapshot(2), "numbers").length(), 0)
+  let mut changes = 0
+  assert_true(history.visit_adjacent_changes("numbers", from=0, to=2, event => {
+    if event is CommitChange(_) { changes += 1 }
+    true
+  }))
+  assert_eq(changes, 0)
+  let finite = @inspect.diff_revisions(history.snapshot(2), history.snapshot(3), "numbers")
+  guard finite is [Changed(before, after)] else { fail("expected NaN to finite update") }
+  assert_eq(before.row.rowid, 1L)
+  assert_eq(after.row.values, [@inspect.Value::Real(8.5)])
+  let null_change = @inspect.diff_revisions(history.snapshot(3), history.snapshot(4), "numbers")
+  guard null_change is [Changed(before_null, after_null)] else { fail("expected stored NaN to NULL update") }
+  guard before_null.row.values is [Real(number)] else { fail("expected raw serial-7 real") }
+  assert_true(number != number)
+  assert_eq(after_null.row.values, [@inspect.Value::Null])
+  let type_change = @inspect.diff_revisions(history.snapshot(4), history.snapshot(5), "numbers")
+  guard type_change is [Changed(old_type, new_type)] else { fail("expected integer to real update") }
+  assert_eq(old_type.row.rowid, 10L)
+  assert_eq(old_type.row.values, [@inspect.Value::Integer(42L)])
+  assert_eq(new_type.row.values, [@inspect.Value::Real(42.0)])
+}
 '''
     lazy, damaged = lazy_scan_fixtures(samples)
+    floats = samples / "floats"
+    make_float_capture(floats)
+    source = source.replace("FLOAT_BASE_BYTES", fixture_literal(floats / "baseline.sqlite")).replace(
+        "FLOAT_WAL_BYTES", fixture_literal(floats / "capture.wal"))
     return source.replace("BASE_BYTES", fixture_literal(samples / "baseline.sqlite")).replace(
         "WAL_BYTES", fixture_literal(samples / "capture.wal")).replace(
         "LAZY_BYTES", fixture_literal(lazy)).replace("DAMAGED_BYTES", fixture_literal(damaged))
@@ -267,7 +302,7 @@ def verify(registry, version):
             if manifest_field(installed, "version") != version:
                 raise RuntimeError("installed registry version differs from the requested release")
         mode = "registry" if registry else "packaged"
-        print(f"{module}@{version}: {mode} consumer passed 5 API tests on each of {', '.join(TARGETS)}")
+        print(f"{module}@{version}: {mode} consumer passed 6 API tests on each of {', '.join(TARGETS)}")
 
 
 if __name__ == "__main__":

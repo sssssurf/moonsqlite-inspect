@@ -29,6 +29,8 @@ SQLite's frame checksums establish WAL continuity. The pinned read transaction e
 
 The index stores metadata proportional to the number of validated frames and commits. Opening another revision reuses it. JSON for a row contains its cell page number and in-page offset. Adding the cell offset to `source.page_offset` locates the cell in the corresponding source. `source.revision` is the revision in which that page version was written. A transaction may write a page without changing a particular row on it. A row can span overflow pages whose origins differ from the cell origin.
 
+Stored-value comparisons retain the storage class and compare REALs numerically, with all NaNs equal to one another and both signed zeros equal. They compare finite numbers exactly, without a tolerance. Raw serial-7 NaNs remain REALs here; SQLite SQL projects those records to NULL. A later serial-0 NULL therefore remains a storage-class change. NaN payload bits, record placement and rewritten but equal page bytes do not define a row-value change. The IEEE regression fixture injects three NaN patterns into actual SQLite leaf records, checks `PRAGMA integrity_check`, and verifies unchanged views and real value/type updates. [SQLite REAL representation](https://sqlite.org/floatingpoint.html)
+
 ## Visit historical rows and arbitrary pairs
 
 `WalRevision::visit_table(name, emit)` visits stored rows in signed rowid order. `visit_revision_changes(before, after, name, emit)` uses the same merge as `diff_revisions`, including nonadjacent and reverse endpoints. Both return `true` only after reaching the end. Returning `false` from the callback stops immediately, without decoding another row, and makes the visitor return `false`.

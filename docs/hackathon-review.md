@@ -1,6 +1,6 @@
 # MoonBit 十一月黑客松验收对照
 
-项目已通过报名初审，依据参赛者于 2026-11-18 提供的组委会通知。交付范围为 SQLite WAL 提交历史、行级差异和受控离线采集。本文件记录实现、发布与复现证据。2026-11-19 重新核对官网，十一月验收仍以官方通知为准，官网列出的四项各 25 分属于 8—10 月季度评选。 [十一月赛事页](https://moonbitlang.github.io/Hackathon2026/)
+项目已通过报名初审，依据参赛者于 2026-11-18 提供的组委会通知。交付范围为 SQLite WAL 提交历史、行级差异和受控离线采集。本文件记录实现、发布与复现证据。2026-11-23 重新核对官网，十一月验收仍以官方通知为准，官网列出的四项各 25 分属于 8—10 月季度评选。 [十一月赛事页](https://moonbitlang.github.io/Hackathon2026/)
 
 ## 初审要求
 
@@ -48,6 +48,7 @@ moon fmt --check
 python -B scripts/sqlite_oracle.py
 python -B scripts/history_stress.py
 python -B scripts/verify_distribution.py
+python -B scripts/verify_readme.py
 ```
 
 `sqlite_oracle.py` 使用 SQLite 生成数据并查询结果，核对 6,012 条基础读取记录，另检查历史快照、批次续传、BLOB 溢出、回收后再增长和损坏尾部。历史路径在三种页大小和三种文本编码的九种组合下逐版本、逐比较核对。
@@ -56,7 +57,23 @@ python -B scripts/verify_distribution.py
 
 `history_stress.py` 用两个固定随机种子和两种页大小，生成四份各含 24 次提交的多页数据库采集。逐一核对 100 个历史快照、120 组相邻及跨版本比较和原始页来源。工作负载含索引写入、B-tree 扩展、溢出页、完整及保存点回滚、自动回收后再增长，以及目标表无变化的旁表提交。`verify_distribution.py` 解压实际分发包，在新工程中运行五个公开 API 测试，覆盖四个后端。它用后续记录损坏的样例验证主动停止后不会继续解码，并验证完整扫描会返回错误。
 
-使用 `python -B scripts/verify_distribution.py --registry --version 0.4.0` 从 Mooncakes 安装发布版本后执行同一组公开 API 检查。
+使用 `python -B scripts/verify_distribution.py --registry --version 0.4.1` 从 Mooncakes 安装发布版本后执行同一组公开 API 检查。
+
+### 2026-11-23 复查与修复
+
+复查覆盖输入采集顺序、WAL 截断与回滚、页版本来源、行级比较、输出限额、跨后端安装和 README 复现。复现到一个结果错误。存储为 IEEE NaN 的 REAL 使用普通浮点相等判断时不等于自身，导致同一文件或同一版本与自身比较也报告更新。`0.4.1` 将存储值比较中的 NaN 视为相等，保留精确有限数值比较和存储类型的区分。
+
+回归样例从 SQLite 数据库生成，再注入三种明确的 NaN 位模式，使用 SQLite 自身的完整性检查确认可读。它检查自身比较、旁表提交、相邻版本、NaN 变为有限数值、NaN 变为存储 NULL，以及 INTEGER 变为 REAL。原始 NaN 的读取保留 REAL 类型，SQL 层投影成 NULL 的行为在文档中单独说明。独立消费工程新增第六项公开 API 回归，并在四个后端执行。 [数值样例](../scripts/float_fixture.py) · [比较规则](wal-timeline.md)
+
+新增 `verify_readme.py` 在解压后的干净分发包中执行 README 历史示例的全部命令，检查七份 JSON 结果，避免仅在已有构建目录里验证。CLI 的 `--help` 与 `-h` 正常显示说明并成功退出。 [示例复现检查](../scripts/verify_readme.py)
+
+### 验收演示与技术说明
+
+1. 按 README 生成采集，先运行 `wal-verify`，展示五个版本及清单校验结果。基线必须早于本周期首次写入，SHA-256 用于确认采集字节未变化，读事务负责保护采集顺序。
+2. 比较 `0→1`、`1→2`，分别展示 `rowid=41` 的更新，再比较 `0→2` 得到空差异。这样说明最新快照或净差异无法替代中间提交的检查。
+3. 展示记录的页号、页内偏移和 WAL 帧来源。该位置指向存放单元的页，溢出 BLOB 可以使用其他页，页被重写也不等于这一行的值改变。
+4. 演示 `wal-series` 的 `next_from` 续传。逐条接口的回调返回 `false` 表示主动停止。访问函数返回 `true` 才表示整个访问完成，某个版本对的 `CommitFinished` 表示该版本对完整。命令行缓冲有界输出，发生错误时不输出半份 JSON。
+5. 说明使用边界。历史路径支持普通 rowid 表及相同存储表定义，输入需满足采集约定，记录、扫描和输出均有预算。项目复用上游 WAL 校验与记录游标，独立新增的是历史页索引、多版本行差异和来源工作流。
 
 ### 性能与边界
 

@@ -3,12 +3,14 @@
 from contextlib import closing
 from itertools import product
 import json
+import math
 from pathlib import Path
 import sqlite3
 import subprocess
 import tempfile
 
 from wal_capture import capture_wal
+from float_fixture import make_float_capture
 from wal_demo import HIGH_ROWID, WAL_PAGE_SIZE, make_capture
 
 
@@ -41,6 +43,42 @@ def decoded(value):
             return bytes.fromhex(value["value"])
         case _:
             raise AssertionError(value)
+
+
+def check_nonfinite_values(directory):
+    bundle = directory / "nonfinite"
+    expected = make_float_capture(bundle)
+    base, wal = bundle / "baseline.sqlite", bundle / "capture.wal"
+    baseline_bytes, wal_bytes = base.read_bytes(), wal.read_bytes()
+    commits = run("wal-history", base, wal)["commits"]
+    assert len(commits) == len(expected) == 6
+    assert run("diff", base, base, "numbers")["entries"] == []
+    snapshots = []
+    for revision, sql_rows in enumerate(expected):
+        report = run("wal-rows", base, wal, str(revision), "numbers")
+        assert report["revision"] == commits[revision]
+        rows = report["entries"]
+        assert len(rows) == len(sql_rows)
+        for row, (key, sql_value) in zip(rows, sql_rows, strict=True):
+            assert int(row["rowid"]) == key
+            value, = row["values"]
+            if key in (1, 2, 3) and sql_value is None and (key != 2 or revision < 4):
+                assert value["type"] == "real" and math.isnan(decoded(value))
+            else:
+                assert decoded(value) == sql_value
+        check_origins(rows, baseline_bytes, wal_bytes, commits[revision]["last_frame"], 512)
+        snapshots.append({int(row["rowid"]): row for row in rows})
+    for before, after in ((0, 0), (0, 1), (1, 2), (0, 2), (2, 0), (5, 5)):
+        assert run("wal-changes", base, wal, str(before), str(after), "numbers")["entries"] == []
+    series = run("wal-series", base, wal, "0", "5", "numbers")
+    assert [len(pair["entries"]) for pair in series["entries"]] == [0, 0, 1, 1, 1]
+    for before, after, rowid in ((2, 3, 1), (3, 4, 2), (4, 5, 10)):
+        expected_change = {"kind": "changed", "before": snapshots[before][rowid], "after": snapshots[after][rowid]}
+        assert run("wal-changes", base, wal, str(before), str(after), "numbers")["entries"] == [expected_change]
+        assert series["entries"][before]["entries"] == [expected_change]
+    legacy = run("table", base, "numbers")["entries"]
+    assert [row["values"] for row in legacy] == [row["values"] for row in snapshots[0].values()]
+    assert base.read_bytes() == baseline_bytes and wal.read_bytes() == wal_bytes
 
 
 def check_rows(report, expected):
@@ -714,6 +752,7 @@ def main():
         raise RuntimeError("unexpected test directory")
     with temp:
         total = main_images(directory)
+        check_nonfinite_values(directory)
         check_cell_boundaries(directory)
         check_rowid_lookup(directory)
         wal_capture(directory)
@@ -728,6 +767,7 @@ def main():
     print("SQLite WAL timeline: 5 revisions, 6 diff pairs, raw cell provenance, resize and invalid-tail cases passed")
     print("WAL series and capture: pagination, overflow updates, response budget, pinned checkpoint and manifest mismatch cases passed")
     print("Historical snapshots and adjacent changes: all 9 page-size and text-encoding combinations matched SQLite")
+    print("Stored IEEE values: NaN self-comparison, unchanged commits, infinities and genuine value/type changes passed")
 
 
 if __name__ == "__main__":

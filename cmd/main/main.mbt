@@ -170,6 +170,25 @@ fn diff_json(
 }
 
 ///|
+fn usage() -> String {
+  let text =
+    #| Usage: moonsqlite-inspect COMMAND
+    #|   wal-history BASE WAL [--manifest FILE]
+    #|   wal-rows BASE WAL REVISION TABLE [--manifest FILE]
+    #|   wal-changes BASE WAL FROM TO TABLE [--manifest FILE]
+    #|   wal-series BASE WAL FROM TO TABLE [--limit COMMITS] [--manifest FILE]
+    #|   wal-verify BASE WAL MANIFEST
+    #|   catalog DB [--wal WAL]
+    #|   (table|index) DB NAME [--wal WAL]
+    #|   row DB NAME ROWID [--wal WAL]
+    #|   range DB NAME FIRST LAST LIMIT [--wal WAL]
+    #|   diff BEFORE AFTER NAME
+    #|   wal-diff DB NAME --wal WAL
+    #|   --help, -h
+  text
+}
+
+///|
 fn run(args : ArrayView[String]) -> Json raise {
   if args is ["wal-history", base, wal, .. options] {
     return history_json(load_timeline(base, wal, manifest_option(options)))
@@ -225,22 +244,7 @@ fn run(args : ArrayView[String]) -> Json raise {
     ["table" as command, path, name, "--wal", wal]
     | ["index" as command, path, name, "--wal", wal] =>
       (command, path, name, Some(wal))
-    _ => {
-      let usage =
-        #| Usage: moonsqlite-inspect COMMAND
-        #|   wal-history BASE WAL [--manifest FILE]
-        #|   wal-rows BASE WAL REVISION TABLE [--manifest FILE]
-        #|   wal-changes BASE WAL FROM TO TABLE [--manifest FILE]
-        #|   wal-series BASE WAL FROM TO TABLE [--limit COMMITS] [--manifest FILE]
-        #|   wal-verify BASE WAL MANIFEST
-        #|   catalog DB [--wal WAL]
-        #|   (table|index) DB NAME [--wal WAL]
-        #|   row DB NAME ROWID [--wal WAL]
-        #|   range DB NAME FIRST LAST LIMIT [--wal WAL]
-        #|   diff BEFORE AFTER NAME
-        #|   wal-diff DB NAME --wal WAL
-      raise CliError(usage)
-    }
+    _ => raise CliError(usage())
   }
   let snapshot = load_snapshot(db_path, wal_path)
   let entries : Json = match command {
@@ -282,6 +286,7 @@ fn run(args : ArrayView[String]) -> Json raise {
 ///|
 fn run_text(args : ArrayView[String]) -> String raise {
   match args {
+    ["--help"] | ["-h"] => usage()
     ["wal-rows", base, wal, revision, name, .. options] => {
       let number = parse_revision(revision)
       let timeline = load_timeline(base, wal, manifest_option(options))

@@ -1,5 +1,11 @@
 # Changes
 
+## 0.4.1
+
+- Fix false changes when a stored REAL contains an IEEE NaN. Unchanged NaNs compare equal in backup, historical pair and adjacent comparisons. Storage-class changes and finite numeric changes remain visible. NaN payload bits are outside value comparison.
+- Check real SQLite files with quiet, negative and signaling NaN patterns, infinities, signed zeros, a subnormal value and an integer-to-REAL transition. Run the public regression on all four backends through the independent consumer.
+- Add `--help` and `-h` with successful exit status. Verify the README's history commands from a clean extracted distribution, including all seven JSON results, in CI.
+
 ## 0.4.0
 
 - Add `WalRevision::visit_table` and `visit_revision_changes` for incremental historical reads and arbitrary endpoint comparisons, including reverse comparisons. Returning `false` stops before another row is decoded. Existing array-returning APIs use the same traversal.
