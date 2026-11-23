@@ -92,17 +92,74 @@ fn changes_text(
 fn rows_text(snapshot : @inspect.WalRevision, name : String) -> String raise {
   let out = JsonOutput::new()
   let mut first = true
-  let head = "{\"revision\":\{commit_json(snapshot.info).stringify()},\"entries\":["
-  let complete = out.append(head) &&
+  let complete = out.append(revision_rows_header(snapshot.info)) &&
     snapshot.visit_table(name, row => {
-      let separator = first || out.append(",")
+      let fits = out.append_row(row, comma=!first)
       first = false
-      separator && out.append_row(row)
+      fits
     })
   guard complete && out.append("]}") else {
     raise CliError(
       "WAL rows exceed the 8 MiB output budget; use WalRevision::visit_table",
     )
   }
+  out.text.to_string()
+}
+
+///|
+fn revision_rows_header(commit : @inspect.WalCommit) -> String {
+  "{\"revision\":\{commit_json(commit).stringify()},\"entries\":["
+}
+
+///|
+fn row_at_text(
+  snapshot : @inspect.WalRevision,
+  name : String,
+  key : Int64,
+) -> String raise {
+  let out = JsonOutput::new()
+  ignore(out.append(revision_rows_header(snapshot.info)))
+  let fits = match snapshot.find_row(name, key) {
+    Some(row) => out.append_row(row, reserve=2)
+    None => true
+  }
+  guard fits && out.append("]}") else {
+    raise CliError(
+      "WAL row exceeds the 8 MiB output budget; use WalRevision::find_row",
+    )
+  }
+  out.text.to_string()
+}
+
+///|
+fn row_range_text(
+  snapshot : @inspect.WalRevision,
+  name : String,
+  first : Int64,
+  last : Int64,
+  limit : Int32,
+) -> String raise {
+  let out = JsonOutput::new()
+  ignore(out.append(revision_rows_header(snapshot.info)))
+  // Leave space for the closing JSON and the longest possible signed rowid.
+  let reserve = "],\"next_rowid\":\"-9223372036854775808\"}".length()
+  let mut has_rows = false
+  let next = snapshot.visit_rowid_range(name, first, last, limit~, row => {
+    let fits = out.append_row(row, comma=has_rows, reserve~)
+    if fits {
+      has_rows = true
+    }
+    fits
+  })
+  guard has_rows || next is None else {
+    raise CliError(
+      "WAL range row exceeds the 8 MiB output budget; use WalRevision::visit_rowid_range",
+    )
+  }
+  let continuation = match next {
+    Some(rowid) => "\"\{rowid}\""
+    None => "null"
+  }
+  ignore(out.append("],\"next_rowid\":\{continuation}}"))
   out.text.to_string()
 }

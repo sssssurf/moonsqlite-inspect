@@ -50,9 +50,21 @@ fn JsonOutput::append(self : JsonOutput, value : String) -> Bool {
 fn JsonOutput::append_row(
   self : JsonOutput,
   row : @inspect.VersionedRow,
+  comma~ : Bool = false,
+  reserve~ : Int32 = 0,
 ) -> Bool {
-  minimum_row_bytes(row) <= self.remaining &&
-  self.append(versioned_row_json(row).stringify())
+  let separator_size = if comma { 1 } else { 0 }
+  let available = self.remaining - reserve - separator_size
+  guard minimum_row_bytes(row) <= available else { return false }
+  let entry = versioned_row_json(row).stringify()
+  let size = utf8_byte_length(entry)
+  guard size <= available else { return false }
+  if comma {
+    self.text.write_char(',')
+  }
+  self.remaining -= size + separator_size
+  self.text.write_string(entry)
+  true
 }
 
 ///|

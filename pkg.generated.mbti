@@ -127,8 +127,10 @@ pub struct WalRevision {
   info : WalCommit
   // private fields
 }
+pub fn WalRevision::find_row(Self, String, Int64) -> VersionedRow? raise InspectError
 pub fn WalRevision::page_origin(Self, Int32) -> PageOrigin raise InspectError
 pub fn WalRevision::scan_table(Self, String) -> Array[VersionedRow] raise InspectError
+pub fn WalRevision::visit_rowid_range(Self, String, Int64, Int64, limit~ : Int32, (VersionedRow) -> Bool) -> Int64? raise InspectError
 pub fn WalRevision::visit_table(Self, String, (VersionedRow) -> Bool) -> Bool raise InspectError
 
 pub struct WalTimeline {

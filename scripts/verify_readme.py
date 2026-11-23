@@ -62,13 +62,21 @@ def verify(skip_update=False):
                 else:
                     reports.append((documented[2], json.loads(process.stdout)))
         assert [name for name, _ in reports] == [
-            "wal-verify", "wal-history", "wal-rows", "wal-changes", "wal-changes", "wal-changes", "wal-series",
+            "wal-verify", "wal-history", "wal-rows", "wal-row", "wal-range", "wal-range",
+            "wal-changes", "wal-changes", "wal-changes", "wal-series",
         ]
-        verified, history, waiting, forward, restored, net, series = (value for _, value in reports)
+        verified, history, waiting, seek, first, last, forward, restored, net, series = (value for _, value in reports)
         assert verified == {"manifest_verified": True, "timeline": history}
         assert len(history["commits"]) == 5
         row, = [row for row in waiting["entries"] if row["rowid"] == "41"]
         assert row["values"][0] == {"type": "text", "value": "waiting"}
+        assert seek == {"revision": waiting["revision"], "entries": [row]}
+        assert seek["entries"][0]["source"]["revision"] == 1
+        assert first["revision"] == last["revision"] == history["commits"][3]
+        assert [entry["rowid"] for entry in first["entries"]] == ["41", "9007199254740993"]
+        assert first["next_rowid"] == "9223372036854775807"
+        assert [entry["rowid"] for entry in last["entries"]] == [first["next_rowid"]]
+        assert last["next_rowid"] is None
         for result, old, new in ((forward, "ready", "waiting"), (restored, "waiting", "ready")):
             change, = result["entries"]
             assert change["kind"] == "changed" and change["after"]["rowid"] == "41"

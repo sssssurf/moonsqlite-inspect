@@ -7,6 +7,26 @@ pub struct Row {
 }
 
 ///|
+priv struct BtreeView {
+  read_page : (Int32) -> BytesView raise InspectError
+  page_count : Int32
+  page_size : Int32
+  usable_size : Int32
+  encoding : TextEncoding
+}
+
+///|
+fn Snapshot::btree_view(self : Snapshot) -> BtreeView {
+  {
+    read_page: number => self.page(number),
+    page_count: self.page_count,
+    page_size: self.page_size,
+    usable_size: self.usable_size,
+    encoding: self.encoding,
+  }
+}
+
+///|
 fn mark_page(seen : Map[Int32, Bool], page : Int32) -> Unit raise InspectError {
   guard !seen.contains(page) else {
     raise Invalid("page \{page} is referenced more than once in the B-tree")
@@ -15,8 +35,8 @@ fn mark_page(seen : Map[Int32, Bool], page : Int32) -> Unit raise InspectError {
 }
 
 ///|
-fn Snapshot::record_payload(
-  self : Snapshot,
+fn BtreeView::record_payload(
+  self : BtreeView,
   cell : BytesView,
   payload : Int32,
   length : UInt64,
@@ -55,7 +75,7 @@ fn Snapshot::record_payload(
   let mut copied = local_size
   while copied < size {
     mark_page(seen, next)
-    let block = self.page(next)
+    let block = (self.read_page)(next)
     next = bounded(word(block, 0, 4), self.page_count, "overflow page")
     let take = if chunk < size - copied { chunk } else { size - copied }
     for i in 0..<take {
@@ -96,12 +116,12 @@ priv struct BtreePage {
 }
 
 ///|
-fn Snapshot::btree_page(
-  self : Snapshot,
+fn BtreeView::btree_page(
+  self : BtreeView,
   number : Int32,
   index_tree : Bool,
 ) -> BtreePage raise InspectError {
-  let bytes = self.page(number)[:self.usable_size]
+  let bytes = (self.read_page)(number)[:self.usable_size]
   let header = if number == 1 { 100 } else { 0 }
   let page_type = word(bytes, header, 1)
   let (interior_type, leaf_type, family) = if index_tree {
@@ -223,7 +243,7 @@ priv struct TableLeaf {
 
 ///|
 priv struct TableCursor {
-  snapshot : Snapshot
+  view : BtreeView
   seen : Map[Int32, Bool]
   stack : Array[TableBranch]
   range : RowidRange?
@@ -232,19 +252,28 @@ priv struct TableCursor {
 }
 
 ///|
-fn Snapshot::table_cursor(
-  self : Snapshot,
+fn BtreeView::table_cursor(
+  self : BtreeView,
   root : Int32,
   range? : RowidRange,
 ) -> TableCursor {
   {
-    snapshot: self,
+    view: self,
     seen: Map([]),
     stack: [{ page: root, depth: 0, lower: None, upper: None, }],
     range,
     leaf: None,
     previous: None,
   }
+}
+
+///|
+fn Snapshot::table_cursor(
+  self : Snapshot,
+  root : Int32,
+  range? : RowidRange,
+) -> TableCursor {
+  self.btree_view().table_cursor(root, range?)
 }
 
 ///|
@@ -282,11 +311,7 @@ fn TableCursor::push_children(
       lower: Some(rowid),
       upper,
     })
-    child = bounded(
-      word(cell, 0, 4),
-      self.snapshot.page_count,
-      "left child page",
-    )
+    child = bounded(word(cell, 0, 4), self.view.page_count, "left child page")
     upper = Some(rowid)
   }
   self.push_branch({
@@ -346,7 +371,7 @@ fn TableCursor::next_leaf(self : TableCursor) -> TableLeaf? raise InspectError {
       raise Invalid("table B-tree exceeds the depth limit")
     }
     mark_page(self.seen, branch.page)
-    let tree = self.snapshot.btree_page(branch.page, false)
+    let tree = self.view.btree_page(branch.page, false)
     if tree.right is Some(right) {
       self.push_children(branch, tree, right)
     } else {
@@ -372,11 +397,11 @@ fn TableCursor::next(self : TableCursor) -> Row? raise InspectError {
   let cell = leaf.tree.bytes[slot.offset:slot.end]
   let (rowid, length, payload) = table_cell_header(cell)
   leaf.branch.check_rowid(rowid, self.previous)
-  let values = self.snapshot.record_payload(
+  let values = self.view.record_payload(
     cell,
     payload,
     length,
-    self.snapshot.usable_size - 35,
+    self.view.usable_size - 35,
     self.seen,
   ) catch {
     Invalid(message) =>
@@ -410,8 +435,8 @@ pub struct IndexRecord {
 }
 
 ///|
-fn Snapshot::walk_index(
-  self : Snapshot,
+fn BtreeView::walk_index(
+  self : BtreeView,
   number : Int32,
   depth : Int32,
   seen : Map[Int32, Bool],
@@ -452,6 +477,6 @@ pub fn Snapshot::scan_index_root(
   root : Int32,
 ) -> Array[IndexRecord] raise InspectError {
   let records = []
-  self.walk_index(root, 0, Map([]), records)
+  self.btree_view().walk_index(root, 0, Map([]), records)
   records
 }

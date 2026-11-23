@@ -24,7 +24,7 @@ def run(*args, error=None):
         assert process.returncode == 2 and error in process.stderr and not process.stdout, (args, process)
         return None
     assert process.returncode == 0, (args, process.stderr)
-    if args[0] in ("wal-rows", "wal-changes", "wal-series"):
+    if args[0] in ("wal-rows", "wal-row", "wal-range", "wal-changes", "wal-series"):
         assert len(process.stdout.encode("utf-8")) <= 8 * 1024 * 1024, "historical JSON exceeds its response budget"
     return json.loads(process.stdout)
 
@@ -273,6 +273,74 @@ def check_rowid_lookup(directory):
     run("row", damaged, "items", str(highest), error="not a rowid-table")
     run("table", damaged, "items", error="not a rowid-table")
 
+    # A historical seek must not visit the damaged, disjoint leaf.
+    empty_wal = directory / "lookup-empty.wal"
+    empty_wal.write_bytes(b"")
+    report = run("wal-row", damaged, empty_wal, "0", "items", str(lowest))
+    assert report["entries"] == [{**low_record, "source": {
+        "kind": "main", "page_offset": str((low_record["page"] - 1) * 512),
+    }}]
+    run("wal-row", damaged, empty_wal, "0", "items", str(highest), error="not a rowid-table")
+    run("wal-range", damaged, empty_wal, "0", "items", str(lowest), str(highest), "2000",
+        error="not a rowid-table")
+
+    bundle = directory / "historical-lookup"
+    point_keys = (lowest, -4, -1, 0, 998, 1201, beyond_js_integer, highest)
+    ranges = ((-13, 23, 4), (lowest, -1192, 2), (highest, highest, 1), (1201, 1300, 3))
+    expected = []
+    with closing(sqlite3.connect(database)) as db:
+        assert db.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        with capture_wal(db) as capture:
+            for revision in range(3):
+                if revision == 1:
+                    db.execute("UPDATE items SET payload=? WHERE rowid=0", (bytes(range(256)) * 24,))
+                    db.execute("INSERT INTO items(rowid, payload) VALUES (1201, 'added in WAL')")
+                    db.commit()
+                if revision == 2:
+                    db.executemany("DELETE FROM items WHERE rowid=?", [(lowest,), (-4,), (highest,)])
+                    db.commit()
+                query = "SELECT rowid, payload FROM items"
+                points = [db.execute(query + " WHERE rowid=?", (key,)).fetchall() for key in point_keys]
+                intervals = [db.execute(query + " WHERE rowid BETWEEN ? AND ? ORDER BY rowid",
+                                        (first, last)).fetchall() for first, last, _ in ranges]
+                expected.append((points, intervals))
+            capture.export(bundle)
+    base, wal, manifest = (bundle / name for name in ("baseline.sqlite", "capture.wal", "capture.json"))
+    base_bytes, wal_bytes = base.read_bytes(), wal.read_bytes()
+    commits = run("wal-verify", base, wal, manifest)["timeline"]["commits"]
+    assert len(commits) == len(expected)
+
+    def check_lookup(report, rows, revision):
+        commit = commits[revision]
+        assert report["revision"] == commit
+        check_rows({**report, "page_size": 512, "page_count": commit["page_count"]}, rows)
+        check_origins(report["entries"], base_bytes, wal_bytes, commit["last_frame"], 512)
+
+    for revision, (points, intervals) in enumerate(expected):
+        args = (base, wal, str(revision), "items")
+        for key, rows in zip(point_keys, points, strict=True):
+            report = run("wal-row", *args, str(key), "--manifest", manifest)
+            check_lookup(report, rows, revision)
+            if key == 0 and revision == 1:
+                assert report["entries"][0]["source"]["revision"] == 1
+        for (first, last, limit), rows in zip(ranges, intervals, strict=True):
+            for start in range(0, max(1, len(rows)), limit):
+                report = run("wal-range", *args, str(first), str(last), str(limit))
+                check_lookup(report, rows[start:start + limit], revision)
+                first = rows[start + limit][0] if start + limit < len(rows) else None
+                assert report["next_rowid"] == (None if first is None else str(first))
+
+    assert run("wal-row", base, wal, "2", "empty", "1")["entries"] == []
+    assert run("wal-range", base, wal, "2", "empty", "-1", "1", "1")["next_rowid"] is None
+    run("wal-row", base, wal, "2", "compact", "1", error="not a rowid-table")
+    run("wal-row", base, wal, "2", "missing", "1", error="NotFound")
+    run("wal-row", base, wal, "3", "items", "1", error="revision 3 does not exist")
+    for key in (str(highest + 1), str(lowest - 1), "0x2"):
+        run("wal-row", base, wal, "2", "items", key, error="64-bit decimal rowid")
+    run("wal-range", base, wal, "2", "items", "1", "0", "1", error="first rowid must be at most")
+    run("wal-range", base, wal, "2", "items", "0", "1", "0", error="row limit must be positive")
+    assert base.read_bytes() == base_bytes and wal.read_bytes() == wal_bytes
+
 
 def wal_capture(directory):
     db_path = directory / "live.sqlite"
@@ -324,6 +392,9 @@ def wal_capture(directory):
     assert history["ignored_wal_bytes"] == len(log_bytes) - len(committed)
     assert len(history["commits"]) == 3
     run("wal-rows", capture, log, "3", "samples", error="revision 3 does not exist")
+    assert run("wal-row", capture, log, "2", "samples", "3")["entries"] == []
+    assert run("wal-row", capture, log, "2", "wal_only", "1")["entries"][0]["source"]["revision"] == 2
+    run("wal-row", capture, log, "1", "wal_only", "1", error="NotFound")
     changes = run("wal-diff", capture, "samples", "--wal", log)["entries"]
     assert [(c["kind"], c["after"]["rowid"]) for c in changes] == [("changed", "1"), ("added", "2")]
     log.write_bytes(committed + b"partial frame")
@@ -546,9 +617,13 @@ def check_capture_manifest(directory):
     baseline, wal, manifest = (first / name for name in ("baseline.sqlite", "capture.wal", "capture.json"))
     assert baseline.stat().st_size == post_checkpoint.stat().st_size
     run("wal-history", post_checkpoint, wal, "--manifest", manifest, error="baseline SHA-256 mismatch")
+    run("wal-row", post_checkpoint, wal, "1", "items", "1", "--manifest", manifest,
+        error="baseline SHA-256 mismatch")
     replacement_wal = second / "capture.wal"
     assert wal.stat().st_size == replacement_wal.stat().st_size
     run("wal-verify", baseline, replacement_wal, manifest, error="WAL epoch mismatch")
+    run("wal-range", baseline, replacement_wal, "1", "items", "1", "2", "1", "--manifest", manifest,
+        error="WAL epoch mismatch")
     corrupt_wal = directory / "edited-capture.wal"
     edited = bytearray(wal.read_bytes())
     edited[-1] ^= 1
@@ -637,7 +712,8 @@ def check_series_budget(directory):
             db.execute("INSERT INTO large_rows VALUES (zeroblob(4194305))")
             db.commit()
             db.execute("DELETE FROM large_rows")
-            db.executemany("INSERT INTO large_rows VALUES (zeroblob(2100000))", [(), ()])
+            db.execute("INSERT INTO large_rows VALUES (zeroblob(2100000))")
+            db.execute("INSERT INTO large_rows VALUES (?)", ("\x00" * 700000,))
             db.commit()
             db.execute("DELETE FROM large_rows")
             db.execute("INSERT INTO large_rows VALUES (?)", ("\x00" * 1398102,))
@@ -656,6 +732,19 @@ def check_series_budget(directory):
     for revision in range(3, 7):
         run("wal-rows", baseline, wal, str(revision), "large_rows", error="8 MiB output budget")
         run("wal-changes", baseline, wal, "0", str(revision), "large_rows", error="8 MiB output budget")
+    # The second row fits the raw byte estimate but not after JSON escaping.
+    first = run("wal-range", baseline, wal, "4", "large_rows", "1", "2", "10")
+    assert first["next_rowid"] == "2"
+    blob, = first["entries"]
+    assert blob["rowid"] == "1" and decoded(blob["values"][0]) == bytes(2100000)
+    second = run("wal-range", baseline, wal, "4", "large_rows", first["next_rowid"], "2", "10")
+    text, = second["entries"]
+    assert text["rowid"] == "2" and decoded(text["values"][0]) == "\x00" * 700000
+    assert second["next_rowid"] is None
+    for revision in (3, 5, 6):
+        run("wal-row", baseline, wal, str(revision), "large_rows", "1", error="8 MiB output budget")
+        run("wal-range", baseline, wal, str(revision), "large_rows", "1", "2", "10",
+            error="8 MiB output budget")
     run("wal-changes", baseline, wal, "3", "1", "large_rows", error="8 MiB output budget")
     near_limit = directory / "near-limit"
     with closing(sqlite3.connect(directory / "near-limit.sqlite")) as db:
@@ -668,6 +757,8 @@ def check_series_budget(directory):
     base, log = near_limit / "baseline.sqlite", near_limit / "capture.wal"
     near_rows = run("wal-rows", base, log, "1", "items")
     assert len(decoded(near_rows["entries"][0]["values"][0])) == 4194000
+    assert run("wal-row", base, log, "1", "items", "1") == near_rows
+    assert run("wal-range", base, log, "1", "items", "1", "1", "3") == {**near_rows, "next_rowid": None}
     assert run("wal-changes", base, log, "0", "1", "items")["entries"][0]["kind"] == "added"
 
 
@@ -710,6 +801,10 @@ def check_history_encodings(directory):
             report = run("wal-rows", baseline, wal, str(revision), "items")
             check_rows({**report, "page_size": page_size, "page_count": sizes[revision]}, expected[revision])
             rows_by_revision.append(report["entries"])
+        target = run("wal-row", baseline, wal, "2", "items", str(-(2**63)))
+        assert target["entries"] == rows_by_revision[2]
+        interval = run("wal-range", baseline, wal, "3", "items", str(-(2**63)), str(2**63 - 1), "1")
+        assert interval["entries"] == rows_by_revision[3][:1] and interval["next_rowid"] == str(2**63 - 1)
         series = run("wal-series", baseline, wal, "0", "3", "items", "--manifest", manifest)
         for revision, pair in enumerate(series["entries"], start=1):
             change, = pair["entries"]
@@ -768,6 +863,7 @@ def main():
     print("WAL series and capture: pagination, overflow updates, response budget, pinned checkpoint and manifest mismatch cases passed")
     print("Historical snapshots and adjacent changes: all 9 page-size and text-encoding combinations matched SQLite")
     print("Stored IEEE values: NaN self-comparison, unchanged commits, infinities and genuine value/type changes passed")
+    print("Historical rowid lookup: signed keys, pruned branches, nine encoding/size combinations, origins and byte-bounded continuation passed")
 
 
 if __name__ == "__main__":

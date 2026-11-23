@@ -74,16 +74,14 @@ fn RevisionCursor::next(
         guard record.rowid is Some(rowid) else {
           raise Unsupported("historical row scans require a rowid table")
         }
-        let origin = self.snapshot.page_origin(record.page_number)
-        return Some({
-          row: {
+        return Some(
+          self.snapshot.with_origin({
             rowid,
             values: record.values.map(stored_value),
             page: record.page_number,
             cell_offset: record.cell_offset,
-          },
-          origin,
-        })
+          }),
+        )
       }
       ScanFinished(summary) => {
         guard summary.completion is Complete else {
@@ -95,6 +93,83 @@ fn RevisionCursor::next(
   } nobreak {
     abort("historical scan ended without a result")
   }
+}
+
+///|
+fn WalRevision::with_origin(
+  self : WalRevision,
+  row : Row,
+) -> VersionedRow raise InspectError {
+  { row, origin: self.page_origin(row.page), }
+}
+
+///|
+fn WalRevision::rowid_cursor(
+  self : WalRevision,
+  name : String,
+  range : RowidRange,
+) -> TableCursor raise InspectError {
+  let root = self.table_entry(name).root_page
+  let header = self.database.header()
+  let encoding = match header.text_encoding {
+    0 | 1 => Utf8
+    2 => Utf16Le
+    3 => Utf16Be
+    _ => raise Unsupported("unknown SQLite text encoding")
+  }
+  let view : BtreeView = {
+    read_page: number => {
+      let bytes = self.database.read_page(number) catch {
+        error => raise inspect_error(error)
+      }
+      bytes[:]
+    },
+    page_count: self.info.page_count,
+    page_size: header.page_size,
+    usable_size: header.usable_size,
+    encoding,
+  }
+  view.table_cursor(root, range~)
+}
+
+///|
+/// Seek one signed rowid in an ordinary table at this revision.
+/// None means the key is absent. Only the lookup path and its payload are read.
+pub fn WalRevision::find_row(
+  self : WalRevision,
+  name : String,
+  rowid : Int64,
+) -> VersionedRow? raise InspectError {
+  let cursor = self.rowid_cursor(name, { first: rowid, last: rowid, })
+  guard cursor.next() is Some(row) else { return None }
+  Some(self.with_origin(row))
+}
+
+///|
+/// Visit up to limit stored rows in an inclusive range in signed rowid order.
+/// If accept returns false, the current row remains the first unaccepted key.
+/// Use the returned key as the lower bound in the same revision and range.
+/// None means the range is exhausted. Errors may follow earlier callbacks.
+pub fn WalRevision::visit_rowid_range(
+  self : WalRevision,
+  name : String,
+  first : Int64,
+  last : Int64,
+  limit~ : Int32,
+  accept : (VersionedRow) -> Bool,
+) -> Int64? raise InspectError {
+  guard first <= last else {
+    raise Invalid("the first rowid must be at most the last rowid")
+  }
+  guard limit > 0 else { raise Invalid("the row limit must be positive") }
+  let cursor = self.rowid_cursor(name, { first, last, })
+  for _ in 0..<limit {
+    guard cursor.next() is Some(row) else { return None }
+    if !accept(self.with_origin(row)) {
+      return Some(row.rowid)
+    }
+  }
+  cursor.peek_rowid()
 }
 
 ///|

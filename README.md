@@ -7,7 +7,7 @@ Open and compare committed versions of an offline SQLite database. Given a check
 Add the module to an existing MoonBit project.
 
 ```sh
-moon add sssssurf/moonsqlite-inspect@0.4.1
+moon add sssssurf/moonsqlite-inspect@0.5.0
 ```
 
 Import the package in that project's `moon.pkg`.
@@ -44,6 +44,9 @@ python scripts/wal_demo.py _build/wal-demo
 node _build/js/debug/build/cmd/main/main.js wal-verify _build/wal-demo/baseline.sqlite _build/wal-demo/capture.wal _build/wal-demo/capture.json
 node _build/js/debug/build/cmd/main/main.js wal-history _build/wal-demo/baseline.sqlite _build/wal-demo/capture.wal
 node _build/js/debug/build/cmd/main/main.js wal-rows _build/wal-demo/baseline.sqlite _build/wal-demo/capture.wal 1 status
+node _build/js/debug/build/cmd/main/main.js wal-row _build/wal-demo/baseline.sqlite _build/wal-demo/capture.wal 1 status 41 --manifest _build/wal-demo/capture.json
+node _build/js/debug/build/cmd/main/main.js wal-range _build/wal-demo/baseline.sqlite _build/wal-demo/capture.wal 3 status -9223372036854775808 9223372036854775807 2
+node _build/js/debug/build/cmd/main/main.js wal-range _build/wal-demo/baseline.sqlite _build/wal-demo/capture.wal 3 status 9223372036854775807 9223372036854775807 2
 node _build/js/debug/build/cmd/main/main.js wal-changes _build/wal-demo/baseline.sqlite _build/wal-demo/capture.wal 0 1 status
 node _build/js/debug/build/cmd/main/main.js wal-changes _build/wal-demo/baseline.sqlite _build/wal-demo/capture.wal 1 2 status
 node _build/js/debug/build/cmd/main/main.js wal-changes _build/wal-demo/baseline.sqlite _build/wal-demo/capture.wal 0 2 status
@@ -52,13 +55,17 @@ node _build/js/debug/build/cmd/main/main.js wal-series _build/wal-demo/baseline.
 
 The demo creates four SQLite commits. Revision 0 is the baseline. Row 41 changes from `ready` to `waiting` in revision 1 and returns to `ready` in revision 2. The two adjacent comparisons each report one change. The comparison from 0 to 2 returns an empty `entries` array. Reported rows identify the cell's page payload offset and, for WAL pages, the frame and revision that supplied that page.
 
+`wal-row` seeks a signed rowid at the selected revision and returns zero or one record. `wal-range` reads an inclusive rowid interval in ascending order, up to the requested row limit and the JSON byte budget. The first example page ends with `next_rowid: "9223372036854775807"`. For the next call, use that value as the first bound and keep the same capture, revision, table and last bound. `null` marks exhaustion. The lookup reads the relevant B-tree branches and any overflow pages needed by the selected records.
+
 `wal-series` compares every adjacent pair in the requested interval, including pairs with zero changes. Each invocation indexes the WAL once and returns up to 32 comparisons by default. Use `--limit` to request 1–1024 comparisons. The demo returns `next_from: 2`, so the next call uses `2 3 status`. A `null` continuation marks completion. Revision 4 in the demo changes the table definition, so the series stops at revision 3.
 
-`wal-rows`, `wal-changes` and `wal-series` each return at most 8 MiB of UTF-8 JSON, including the final newline. They process records incrementally and return an error with empty standard output if the document exceeds that budget or a later record is invalid. Reduce the series `--limit` or use the library visitors below for larger results. The limit applies to the response size; record decoding and the shared history index also use memory.
+`wal-rows`, `wal-row`, `wal-range`, `wal-changes` and `wal-series` each return at most 8 MiB of UTF-8 JSON, including the final newline. `wal-range` reserves space for its continuation and returns early when another row would exceed the budget. When the first row cannot fit, the command reports an error with empty standard output. Use `wal-range` for large tables, a smaller series `--limit` for multiple comparisons or a library visitor for larger individual values. A decoding error while reading a page of results discards that response. Record decoding and the shared history index also use memory.
 
 `wal-verify` checks file sizes, SHA-256 digests and the WAL epoch against `capture.json`, then reports the validated timeline. Provide `--manifest FILE` to apply the same check before any history read or comparison. To make your own bundle, use the capture helper with a SQLite writer you control. It keeps a read transaction open from the checkpointed baseline through export. The CLI accepts up to 64 MiB per database or WAL file. Use the latest-snapshot commands below for a consistent same-time database/WAL pair. [Capture and snapshot details](docs/wal-timeline.md)
 
 From MoonBit, open the capture once with `open_wal_timeline(base, wal)`. Use `commits()` to list revisions, `snapshot(revision)` to read stored rows and `diff_revisions(before, after, name)` for a pair with matching table definitions. `WalRevision::visit_table` visits rows without collecting the table, and `visit_revision_changes` visits changes between any two supported views, including reverse comparisons. Return `false` to stop before reading another record. A `true` result means the scan completed; an error can follow earlier callbacks. The array-returning APIs remain available. `visit_adjacent_changes` emits ordered changes and completion events one comparison at a time. `page_origin(page)` gives the underlying byte location of a logical page. [Visitor examples](docs/wal-timeline.md#visit-historical-rows-and-arbitrary-pairs)
+
+`WalRevision::find_row` and `WalRevision::visit_rowid_range` seek directly in a revision. The range visitor returns the first unaccepted key when its row limit is reached or its callback declines the current row. [Historical lookup API](docs/wal-timeline.md#seek-rows-at-a-revision)
 
 ## Inspect a backup or the latest snapshot
 
@@ -100,14 +107,16 @@ The oracle checks 6,012 legacy table, index and `WITHOUT ROWID` records across t
 
 `history_stress.py` uses two fixed seeds and two page sizes to generate four captures with 24 commits each. It compares 100 historical snapshots and 120 adjacent, nonadjacent, reverse or identical-endpoint comparisons with SQLite queries, and checks cell origins against raw frame bytes. The workload includes multi-page tables, index updates, overflow payloads, growth, vacuum shrink and regrowth, savepoint and transaction rollback, and writes to an unrelated table.
 
-`verify_distribution.py` unpacks the current distribution and uses it in a separate consumer project. Six public API tests run on each of the four backends. They check snapshot reads, changes that are later reversed, signed 64-bit rowids, event order, cancellation, budgets, schema mismatch errors and unchanged NaNs. A damaged later record verifies that row and pair visitors stop before decoding it when the consumer cancels, while a full traversal rejects it. `verify_readme.py` extracts the distribution into a clean directory, executes the commands in the README's history example and checks all seven JSON reports. To verify the published release using a new registry installation, update the index and run the registry mode.
+`verify_distribution.py` unpacks the current distribution and uses it in a separate consumer project. Seven public API tests run on each of the four backends, including a history seek and a resume at the first rejected key. The SQLite oracle checks multi-level seeks, historical insertion and deletion, raw cell origins and pagination where JSON escaping triggers the byte budget. `verify_readme.py` executes the README's history commands in a newly extracted package and checks all ten JSON reports. To verify the published release using a new registry installation, update the index and run the registry mode.
 
 ```sh
 moon update
-python -B scripts/verify_distribution.py --registry --version 0.4.1
+python -B scripts/verify_distribution.py --registry --version 0.5.0
 ```
 
 After building the CLI, `python -B scripts/benchmark.py` measures latest WAL loading, backup comparison and point lookup. Add `--history` to measure indexing 12,000 commits and `--compare-export` to compare full exports of an 8,000-row BLOB table. Pass `--baseline /path/to/main.js` to run the paired cases against an earlier build. The benchmark checks matching results before reporting times.
+
+Use `python -B scripts/benchmark.py --history-lookup --runs 7` to compare historical point lookup with scanning and filtering an 8,000-row capture. Supply `--baseline` with a 0.4.1 build to use that release for the scan. [Optimization plan and verification results](docs/optimization-plan-0.5.0.md)
 
 ## Source and license
 

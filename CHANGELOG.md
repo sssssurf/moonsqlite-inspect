@@ -1,5 +1,11 @@
 # Changes
 
+## 0.5.0
+
+- Seek a row or an inclusive rowid interval at any validated revision. `WalRevision::find_row` and `WalRevision::visit_rowid_range` reuse the range cursor and return each cell's source.
+- Add `wal-row` and `wal-range` with manifest checks. Range pages reserve room for a lossless signed 64-bit continuation and stop at the requested row limit or the 8 MiB response budget.
+- Verify historical seeks and ranges against SQLite queries and raw WAL frames. Cover multiple B-tree levels, pruned branches, insertions and deletions, overflow, page sizes and encodings, row and byte limits, and independent installation on all four targets.
+
 ## 0.4.1
 
 - Fix false changes when a stored REAL contains an IEEE NaN. Unchanged NaNs compare equal in backup, historical pair and adjacent comparisons. Storage-class changes and finite numeric changes remain visible. NaN payload bits are outside value comparison.

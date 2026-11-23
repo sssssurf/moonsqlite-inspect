@@ -162,6 +162,43 @@ test "installed row and pair visitors support arbitrary endpoints and completion
 }
 
 ///|
+test "installed historical seek preserves row origins and resumes at the first rejected key" {
+  let history = timeline()
+  let base = history.snapshot(0)
+  let waiting = history.snapshot(1)
+  let third = history.snapshot(3)
+  let old = base.find_row("status", 41L).unwrap()
+  let changed = waiting.find_row("status", 41L).unwrap()
+  assert_eq(old.row.values[0], @inspect.Value::Text("ready"))
+  assert_eq(changed.row.values[0], @inspect.Value::Text("waiting"))
+  assert_true(old.origin is MainPage(_))
+  assert_true(changed.origin is WalFrame({revision: 1, ..}))
+  assert_true(base.find_row("status", 9223372036854775807L) is None)
+  assert_true(third.find_row("status", -9223372036854775808L) is None)
+  let accepted : Array[Int64] = []
+  let start = third.visit_rowid_range("status", -9223372036854775808L, 9223372036854775807L, limit=1, row => {
+    accepted.push(row.row.rowid)
+    true
+  })
+  assert_eq(start, Some(9007199254740993L))
+  let next = third.visit_rowid_range("status", start.unwrap(), 9223372036854775807L, limit=5, row => {
+    if row.row.rowid == 9223372036854775807L {
+      false
+    } else {
+      accepted.push(row.row.rowid)
+      true
+    }
+  })
+  assert_eq(next, Some(9223372036854775807L))
+  let rest = third.visit_rowid_range("status", next.unwrap(), 9223372036854775807L, limit=5, row => {
+    accepted.push(row.row.rowid)
+    true
+  })
+  assert_eq(rest, None)
+  assert_eq(accepted, [41L, 9007199254740993L, 9223372036854775807L])
+}
+
+///|
 test "installed visitors stop before decoding a later damaged record" {
   let first = @inspect.open_wal_timeline(LAZY_BYTES, b"").snapshot(0)
   let damaged = @inspect.open_wal_timeline(DAMAGED_BYTES, b"").snapshot(0)
@@ -302,7 +339,7 @@ def verify(registry, version):
             if manifest_field(installed, "version") != version:
                 raise RuntimeError("installed registry version differs from the requested release")
         mode = "registry" if registry else "packaged"
-        print(f"{module}@{version}: {mode} consumer passed 6 API tests on each of {', '.join(TARGETS)}")
+        print(f"{module}@{version}: {mode} consumer passed 7 API tests on each of {', '.join(TARGETS)}")
 
 
 if __name__ == "__main__":

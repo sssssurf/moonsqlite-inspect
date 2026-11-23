@@ -175,6 +175,8 @@ fn usage() -> String {
     #| Usage: moonsqlite-inspect COMMAND
     #|   wal-history BASE WAL [--manifest FILE]
     #|   wal-rows BASE WAL REVISION TABLE [--manifest FILE]
+    #|   wal-row BASE WAL REVISION TABLE ROWID [--manifest FILE]
+    #|   wal-range BASE WAL REVISION TABLE FIRST LAST LIMIT [--manifest FILE]
     #|   wal-changes BASE WAL FROM TO TABLE [--manifest FILE]
     #|   wal-series BASE WAL FROM TO TABLE [--limit COMMITS] [--manifest FILE]
     #|   wal-verify BASE WAL MANIFEST
@@ -291,6 +293,20 @@ fn run_text(args : ArrayView[String]) -> String raise {
       let number = parse_revision(revision)
       let timeline = load_timeline(base, wal, manifest_option(options))
       rows_text(timeline.snapshot(number), name)
+    }
+    ["wal-row", base, wal, revision, name, key, .. options] => {
+      let number = parse_revision(revision)
+      let rowid = parse_rowid(key)
+      let timeline = load_timeline(base, wal, manifest_option(options))
+      row_at_text(timeline.snapshot(number), name, rowid)
+    }
+    ["wal-range", base, wal, revision, name, first, last, limit, .. options] => {
+      let number = parse_revision(revision)
+      let lower = parse_rowid(first)
+      let upper = parse_rowid(last)
+      let max_rows = parse_limit(limit)
+      let timeline = load_timeline(base, wal, manifest_option(options))
+      row_range_text(timeline.snapshot(number), name, lower, upper, max_rows)
     }
     ["wal-changes", base, wal, before, after, name, .. options] => {
       let from = parse_revision(before)

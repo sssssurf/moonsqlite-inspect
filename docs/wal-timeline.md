@@ -31,6 +31,23 @@ The index stores metadata proportional to the number of validated frames and com
 
 Stored-value comparisons retain the storage class and compare REALs numerically, with all NaNs equal to one another and both signed zeros equal. They compare finite numbers exactly, without a tolerance. Raw serial-7 NaNs remain REALs here; SQLite SQL projects those records to NULL. A later serial-0 NULL therefore remains a storage-class change. NaN payload bits, record placement and rewritten but equal page bytes do not define a row-value change. The IEEE regression fixture injects three NaN patterns into actual SQLite leaf records, checks `PRAGMA integrity_check`, and verifies unchanged views and real value/type updates. [SQLite REAL representation](https://sqlite.org/floatingpoint.html)
 
+## Seek rows at a revision
+
+`WalRevision::find_row(name, rowid)` returns a stored row with its origin, or `None` if the key is absent. `WalRevision::visit_rowid_range(name, first, last, limit~, accept)` visits a closed interval in signed rowid order. Both resolve the table's root from the selected revision's schema. The range cursor follows branches whose key bounds intersect the interval. It resolves each needed B-tree or overflow page through the historical index and validates the pages and records it reads. A full scan validates the other table branches.
+
+```moonbit
+let view = timeline.snapshot(3)
+let record = view.find_row("status", 41L)
+let next = view.visit_rowid_range("status", 41L, 9223372036854775807L, limit=2, row => {
+  println(row.row.rowid)
+  true
+})
+```
+
+If the row limit is reached, the cursor checks the next key without decoding that row's value. A callback that returns `false` leaves its current row unaccepted. In both cases the function returns the first unaccepted rowid. Resume with that rowid as the inclusive lower bound on the same capture, revision, table and upper bound. `None` marks exhaustion. A read error can follow earlier callbacks. The seek has a 16 MiB decoded-record limit and validates the visited tree depth. The caller sets the range's row limit.
+
+The CLI equivalents are `wal-row BASE WAL REVISION TABLE ROWID` and `wal-range BASE WAL REVISION TABLE FIRST LAST LIMIT`. Both accept `--manifest FILE` and preserve the existing versioned record format. A range response includes `next_rowid` as a decimal string or `null`. Its 8 MiB UTF-8 budget includes JSON metadata and the final newline. When the row count or byte limit is reached, a complete page of results and the continuation are returned. If the first row exceeds the available space, the command returns an error and no JSON. Each CLI invocation opens its own index for the supplied capture. A library caller can hold the revision and use it across requests.
+
 ## Visit historical rows and arbitrary pairs
 
 `WalRevision::visit_table(name, emit)` visits stored rows in signed rowid order. `visit_revision_changes(before, after, name, emit)` uses the same merge as `diff_revisions`, including nonadjacent and reverse endpoints. Both return `true` only after reaching the end. Returning `false` from the callback stops immediately, without decoding another row, and makes the visitor return `false`.

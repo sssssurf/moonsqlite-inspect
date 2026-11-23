@@ -11,6 +11,8 @@ import subprocess
 import tempfile
 from time import perf_counter
 
+from wal_capture import capture_wal
+
 
 ROOT = Path(__file__).resolve().parents[1]
 WAL_COMMITS = 12_000
@@ -65,7 +67,7 @@ def measure(cases, preload, runs, *, rowid=None):
         order = cases if trial % 2 == 0 else reversed(cases)
         for name, cli, command in order:
             milliseconds, max_rss_kib, report = sample(cli, preload, command)
-            if rowid is not None and command[0] == "table":
+            if rowid is not None and command[0] in ("table", "wal-rows"):
                 report["entries"] = [row for row in report["entries"] if row["rowid"] == rowid]
             if expected is None:
                 expected = report
@@ -80,12 +82,52 @@ def measure(cases, preload, runs, *, rowid=None):
     }, expected
 
 
+def measure_history_lookup(directory, preload, baseline, current, runs):
+    bundle = directory / "lookup-capture"
+    rowid = BACKUP_ROWS - 3
+    payload = bytes(range(256)) + b"updated in revision one"
+    with closing(sqlite3.connect(directory / "lookup.sqlite")) as db:
+        db.execute("PRAGMA page_size=4096")
+        assert db.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        db.execute("CREATE TABLE items(payload)")
+        db.executemany("INSERT INTO items VALUES (zeroblob(300))", [()] * BACKUP_ROWS)
+        db.commit()
+        with capture_wal(db) as capture:
+            db.execute("UPDATE items SET payload=? WHERE rowid=?", (payload, rowid))
+            db.commit()
+            expected, = db.execute("SELECT payload FROM items WHERE rowid=?", (rowid,)).fetchone()
+            capture.export(bundle)
+    base, wal, manifest = (bundle / name for name in ("baseline.sqlite", "capture.wal", "capture.json"))
+    target = [base, wal, "1", "items"]
+    options = ["--manifest", manifest]
+    results, report = measure([
+        ("full_history_scan_then_filter", baseline, ["wal-rows", *target, *options]),
+        ("historical_rowid_seek", current, ["wal-row", *target, str(rowid), *options]),
+    ], preload, runs, rowid=str(rowid))
+    row, = report["entries"]
+    assert row["rowid"] == str(rowid)
+    assert row["values"] == [{"type": "blob", "value": expected.hex()}]
+    assert row["source"]["kind"] == "wal" and row["source"]["revision"] == 1
+    return {
+        "node": subprocess.check_output(["node", "--version"], text=True).strip(),
+        "sqlite": sqlite3.sqlite_version,
+        "runs_per_cli": runs,
+        "rows": BACKUP_ROWS,
+        "rowid": str(rowid),
+        "revision": 1,
+        "baseline_bytes": base.stat().st_size,
+        "wal_bytes": wal.stat().st_size,
+        "results": results,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cli", type=Path, default=ROOT / "_build/js/debug/build/cmd/main/main.js")
     parser.add_argument("--baseline", type=Path, help="Compiled CLI from an earlier version")
     parser.add_argument("--history", action="store_true", help="Also measure indexing all WAL revisions")
     parser.add_argument("--compare-export", action="store_true", help="Also compare the full BLOB table export")
+    parser.add_argument("--history-lookup", action="store_true", help="Measure historical row lookup instead of the default workloads")
     parser.add_argument("--runs", type=int, default=5)
     options = parser.parse_args()
     if options.runs < 1:
@@ -102,6 +144,9 @@ def main():
     with temp:
         preload = directory / "memory.cjs"
         preload.write_text("process.on('exit', () => console.error(process.resourceUsage().maxRSS));\n", encoding="utf-8")
+        if options.history_lookup:
+            print(json.dumps(measure_history_lookup(directory, preload, clis[0][1], clis[-1][1], options.runs), indent=2))
+            return
         wal_command, wal_bytes = make_wal(directory)
         wal, catalog = measure([(name, cli, wal_command) for name, cli in clis], preload, options.runs)
         assert catalog["wal_frames_applied"] >= WAL_COMMITS and catalog["wal_tail_bytes"] == 0
