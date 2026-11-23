@@ -51,3 +51,13 @@
 ```sh
 python -B scripts/benchmark.py --history-lookup --baseline /path/to/0.4.1/main.js --runs 7
 ```
+
+### 交付核对
+
+| 交付项 | 验证结果 |
+| --- | --- |
+| 规划与实现 | 规划单独提交为 `e53ecda`。两项库接口、两个 CLI 命令及回归提交为 `298ca2d`。 [发布源码](https://github.com/sssssurf/moonsqlite-inspect/tree/298ca2da4afca4d0ae21d7bf66b5dff24362cf77) |
+| 四后端与 SQLite 对照 | 线上四个后端各通过 9 项库测试和 7 项独立消费测试。6,012 条基础记录、100 个历史快照、120 组对比及新增历史查找和分页均通过。 [线上检查](https://github.com/sssssurf/moonsqlite-inspect/actions/runs/45209808062) |
+| 示例复现 | 干净分发包执行 README 的 14 条命令，核对 10 份 JSON，包括修订 1 的点查、修订 3 的两页结果与续传键。 [复现脚本](../scripts/verify_readme.py) |
+| 发布与新工程安装 | `0.5.0` 已发布，从 Mooncakes 重装后四个后端各通过 7 项独立接口测试，上传包的 SHA-256 与注册表一致。 [发布入口](https://mooncakes.io/docs/sssssurf/moonsqlite-inspect) |
+| 验收材料 | README、设计说明、变更日志、验收对照和参赛者本地申报书已同步到 `0.5.0`。 [验收证据](hackathon-review.md) |
