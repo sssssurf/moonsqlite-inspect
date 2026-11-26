@@ -4,10 +4,10 @@ Open and compare committed versions of an offline SQLite database. Given a check
 
 ## Install the library
 
-Use a current MoonBit toolchain. Check the compiler with `moon version --all`. CI requires `moonc` 0.10.16 or newer, and the 0.5.0 release was verified with 0.10.22. Add the module to an existing MoonBit project. [Release verification](https://github.com/sssssurf/moonsqlite-inspect/actions/runs/45209808062)
+Use a current MoonBit toolchain. Check the compiler with `moon version --all`. CI requires `moonc` 0.10.16 or newer and records the tested version in each run. Add the module to an existing MoonBit project. [CI runs](https://github.com/sssssurf/moonsqlite-inspect/actions/workflows/ci.yml)
 
 ```sh
-moon add sssssurf/moonsqlite-inspect@0.5.0
+moon add sssssurf/moonsqlite-inspect@0.5.1
 ```
 
 Import the package in that project's `moon.pkg`.
@@ -111,7 +111,7 @@ The oracle checks 6,012 legacy table, index and `WITHOUT ROWID` records across t
 
 ```sh
 moon update
-python -B scripts/verify_distribution.py --registry --version 0.5.0
+python -B scripts/verify_distribution.py --registry --version 0.5.1
 ```
 
 After building the CLI, `python -B scripts/benchmark.py` measures latest WAL loading, backup comparison and point lookup. Add `--history` to measure indexing 12,000 commits and `--compare-export` to compare full exports of an 8,000-row BLOB table. Pass `--baseline /path/to/main.js` to run the paired cases against an earlier build. The benchmark checks matching results before reporting times.

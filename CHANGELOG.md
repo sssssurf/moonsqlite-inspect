@@ -1,5 +1,10 @@
 # Changes
 
+## 0.5.1
+
+- Use page membership tracking that compiles with warnings denied on MoonBit 1.0.0-rc1 and 0.10.21.
+- Check the compiler version in CI against the November acceptance floor of 0.10.16 and map the nine requirements to repository evidence.
+
 ## 0.5.0
 
 - Seek a row or an inclusive rowid interval at any validated revision. `WalRevision::find_row` and `WalRevision::visit_rowid_range` reuse the range cursor and return each cell's source.

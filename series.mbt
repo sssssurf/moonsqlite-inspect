@@ -10,7 +10,7 @@ pub(all) enum WalChangeEvent {
 ///|
 priv struct TracedRevision {
   view : RevisionView
-  pages : Set[Int32]
+  pages : Map[Int32, Unit]
 }
 
 ///|
@@ -30,7 +30,7 @@ impl @sqlite.RangeSource for TracedRevision with fn read_range64(
     let first = (offset / page_size).to_int() + 1
     let last = ((offset + count.to_int64() - 1L) / page_size).to_int() + 1
     for page in first..<=last {
-      self.pages.add(page)
+      self.pages[page] = ()
     }
   }
   bytes
@@ -41,7 +41,7 @@ fn WalTimeline::unchanged_pages(
   self : WalTimeline,
   before : WalCommit,
   after : WalCommit,
-  pages : Set[Int32],
+  pages : Map[Int32, Unit],
 ) -> Bool {
   if before.page_count != after.page_count {
     return false
@@ -92,7 +92,7 @@ pub fn WalTimeline::visit_adjacent_changes(
       }
       continue
     }
-    let pages = Set([])
+    let pages = Map([])
     let next = self.open_revision(entry, Some(pages))
     let next_entry = next.table_entry(name)
     let finished = visit_revision_pair(

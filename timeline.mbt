@@ -356,7 +356,7 @@ pub fn WalTimeline::commit(
 fn WalTimeline::open_revision(
   self : WalTimeline,
   entry : RevisionEntry,
-  reads : Set[Int32]?,
+  reads : Map[Int32, Unit]?,
 ) -> WalRevision raise InspectError {
   let view : RevisionView = { timeline: self, entry, }
   let source : &@sqlite.RangeSource = match reads {

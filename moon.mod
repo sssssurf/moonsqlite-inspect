@@ -1,6 +1,6 @@
 name = "sssssurf/moonsqlite-inspect"
 
-version = "0.5.0"
+version = "0.5.1"
 
 readme = "README.md"
 
