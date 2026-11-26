@@ -26,19 +26,19 @@
 
 | 验收项 | 证据或状态 |
 | --- | --- |
-| 1. MoonBit 为主，`moonc` 至少 0.10.16 | 核心库和 CLI 用 MoonBit 实现。0.5.0 发布检查使用 0.10.22，CI 会在检查、构建和测试前核对编译器版本。 [发布检查](https://github.com/sssssurf/moonsqlite-inspect/actions/runs/45209808062) · [CI 配置](../.github/workflows/ci.yml) |
+| 1. MoonBit 为主，`moonc` 至少 0.10.16 | 核心库和 CLI 用 MoonBit 实现。0.5.1 发布检查使用 1.0.0-rc1，CI 在检查、构建和测试前核对编译器版本。 [发布检查](https://github.com/sssssurf/moonsqlite-inspect/actions/runs/45821395923) · [CI 配置](../.github/workflows/ci.yml) |
 | 2. 公开仓库与清晰提交 | 默认分支为公开的 `main`。历史记录涵盖历史视图、逐提交导出、采集清单、误报修复和历史点查与分页。 [公开仓库](https://github.com/sssssurf/moonsqlite-inspect) · [提交记录](https://github.com/sssssurf/moonsqlite-inspect/commits/main/) |
 | 3. 源代码结构与核心功能 | 历史页索引、行级差异和来源、连续提交比较分模块实现。CLI 通过库访问指定历史版本，Python 脚本负责生成受控采集和测试数据。 [页版本索引](../timeline.mbt) · [行读取与比较](../history_rows.mbt) · [连续比较](../series.mbt) · [设计和边界](wal-timeline.md) |
 | 4. README 与复现 | README 说明用途、包安装、库 API、CLI 命令、输入约定和复现步骤。 [README](../README.md) |
 | 5. CI 覆盖检查、构建和测试 | CI 对 JS、native、Wasm、Wasm GC 运行 `moon check`、`moon build` 和 `moon test`，并验证格式、SQLite 对照、分发包和 README 示例。 [CI 配置](../.github/workflows/ci.yml) · [运行记录](https://github.com/sssssurf/moonsqlite-inspect/actions/workflows/ci.yml) |
 | 6. 可运行示例 | `wal_demo.py` 生成基线、WAL 和清单。干净分发包执行 README 的 14 条命令并验证 10 份 JSON，包括历史点查、分页续传和版本差异。 [示例步骤](../README.md#reproduce-a-wal-history) · [复现检查](../scripts/verify_readme.py) |
 | 7. 核心路径测试 | 四后端各通过 9 项库测试和 7 项独立消费测试。SQLite 对照核验 6,012 条基础记录、100 个多页历史快照和 120 组差异，另覆盖损坏尾部、回滚、溢出、采集错配和输出限额。 [SQLite 对照](../scripts/sqlite_oracle.py) · [多页工作负载](../scripts/history_stress.py) |
-| 8. Mooncakes 发布 | `0.5.0` 已发布，独立工程从注册表安装后四个后端各通过 7 项接口测试，实际上传包的 SHA-256 与注册表一致。 [公开版本](https://mooncakes.io/docs/sssssurf/moonsqlite-inspect) · [安装验证](../scripts/verify_distribution.py) |
+| 8. Mooncakes 发布 | `0.5.1` 已发布，独立工程从注册表安装后四个后端各通过 7 项接口测试，实际上传包的 SHA-256 与注册表一致。 [公开版本](https://mooncakes.io/docs/sssssurf/moonsqlite-inspect) · [安装验证](../scripts/verify_distribution.py) |
 | 9. OSI 许可证与上游来源 | 项目和 MoonSQLiteFile 0.8.1 均为 Apache-2.0。`moon.mod` 固定上游版本，通过其公开接口复用读取和 WAL 校验能力。 [OSI 许可条目](https://opensource.org/license/apache-2.0) · [项目许可](../LICENSE) · [上游许可](https://github.com/prowk/MoonSQLiteFile/blob/v0.8.1/LICENSE) |
 
 代码、测试与文档使用 AI 辅助开发。页版本有效期、缩小后的页失效、二分选择页面和读事务保护采集顺序均有实现及对照检查。 [设计和边界](wal-timeline.md)
 
-`0.5.0` 在 MoonBit 编译器 0.10.22、Node.js 24、SQLite 3.46.1 的线上环境通过完整 CI。四个后端各通过九项库测试和七项独立消费测试。SQLite 对照、多页历史工作负载和干净分发包示例均通过，README 的 14 条命令与 10 份 JSON 输出均得到验证。Windows 本地的 SQLite 3.45.3 也通过核心对照。 [发布源码](https://github.com/sssssurf/moonsqlite-inspect/tree/298ca2da4afca4d0ae21d7bf66b5dff24362cf77) · [代码 CI](https://github.com/sssssurf/moonsqlite-inspect/actions/runs/45209808062)
+`0.5.1` 在 MoonBit 编译器 1.0.0-rc1、Node.js 24、SQLite 3.46.1 的线上环境通过完整 CI。四个后端各通过 9 项库测试和 7 项独立消费测试，README 的 14 条命令完整运行并核对 10 份 JSON。新版工具链弃用了原有集合写入方法和 JSON 嵌套参数，本版修复兼容性并保留清单的八层嵌套上限与重复键拒绝。Windows 上使用 0.10.21 从注册表安装并通过独立消费测试。 [发布源码](https://github.com/sssssurf/moonsqlite-inspect/tree/6c338931eeb45fcdb56450d6b0b9e4f3a2ac5bd9) · [代码 CI](https://github.com/sssssurf/moonsqlite-inspect/actions/runs/45821395923)
 
 ### 重现验收检查
 
@@ -62,7 +62,7 @@ python -B scripts/verify_readme.py
 
 `history_stress.py` 用两个固定随机种子和两种页大小，生成四份各含 24 次提交的多页数据库采集。逐一核对 100 个历史快照、120 组相邻及跨版本比较和原始页来源。工作负载含索引写入、B-tree 扩展、溢出页、完整及保存点回滚、自动回收后再增长，以及目标表无变化的旁表提交。`verify_distribution.py` 解压实际分发包，在新工程中运行七个公开 API 测试，覆盖四个后端。它验证主动停止、历史点查、单元来源与从首个未接收行号续传。
 
-使用 `python -B scripts/verify_distribution.py --registry --version 0.5.0` 从 Mooncakes 安装发布版本后执行同一组公开 API 检查。
+使用 `python -B scripts/verify_distribution.py --registry --version 0.5.1` 从 Mooncakes 安装发布版本后执行同一组公开 API 检查。
 
 ### 2026-11-23 复查与修复
 
