@@ -4,7 +4,7 @@ Open and compare committed versions of an offline SQLite database. Given a check
 
 ## Install the library
 
-Add the module to an existing MoonBit project.
+Use a current MoonBit toolchain. Check the compiler with `moon version --all`. CI requires `moonc` 0.10.16 or newer, and the 0.5.0 release was verified with 0.10.22. Add the module to an existing MoonBit project. [Release verification](https://github.com/sssssurf/moonsqlite-inspect/actions/runs/45209808062)
 
 ```sh
 moon add sssssurf/moonsqlite-inspect@0.5.0

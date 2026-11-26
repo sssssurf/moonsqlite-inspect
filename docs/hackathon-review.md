@@ -1,6 +1,6 @@
 # MoonBit 十一月黑客松验收对照
 
-项目已通过报名初审，依据参赛者于 2026-11-18 提供的组委会通知。交付范围为 SQLite WAL 提交历史、行级差异和受控离线采集。本文件记录实现、发布与复现证据。2026-11-23 重新核对官网，十一月验收仍以官方通知为准，官网列出的四项各 25 分属于 8—10 月季度评选。 [十一月赛事页](https://moonbitlang.github.io/Hackathon2026/)
+项目已通过报名初审。按参赛者于 2026-11-26 提供的验收指南，初审通过后持续开发并将成果上传 GitHub，验收前无需再填表。交付范围为 SQLite WAL 提交历史、行级差异和受控离线采集。 [十一月赛事页](https://moonbitlang.github.io/Hackathon2026/)
 
 ## 初审要求
 
@@ -22,16 +22,21 @@
 
 ## 验收证据
 
-官网要求 MoonBit 为主、公开且有可追踪记录、能运行、有实质工程贡献、许可证清楚，参赛者能够解释技术决策。章程第 5.1 节进一步列出可复现的 README、CI 检查/构建/测试、至少一个可运行示例、核心路径测试和 Mooncakes 发布。 [官网验收标准](https://moonbitlang.github.io/Hackathon2026/#entry-rules) · [赛事章程](https://bxup9uklfcb.feishu.cn/wiki/Dx4Bwd6D1i3GfHkajQCcF7SznEd)
+以下按本期指南的九条顺序列出对应证据。 [官网验收标准](https://moonbitlang.github.io/Hackathon2026/#entry-rules)
 
 | 验收项 | 证据或状态 |
 | --- | --- |
-| MoonBit 实现与实质贡献 | `timeline.mbt` 实现页版本索引和历史视图，`history_rows.mbt` 实现行级对比与来源，`series.mbt` 复用同一索引导出连续提交。受控采集脚本持有基线读事务并生成 SHA-256 清单。 [页版本索引](../timeline.mbt) · [批量导出](../series.mbt) · [采集脚本](../scripts/wal_capture.py) |
-| 公开仓库与开发记录 | `0.2.0` 加入历史视图，`0.3.0` 加入逐提交导出与采集清单，`0.4.0` 加入逐条历史访问与多页对照，`0.4.1` 修复 NaN 误报并验证干净分发包的演示，`0.5.0` 增加历史点查和范围分页。 [默认分支提交](https://github.com/sssssurf/moonsqlite-inspect/commits/main/) |
-| 安装、示例、核心测试与 CI | README 包含包安装与 CLI 运行示例。CI 运行四个后端、格式检查、SQLite 对照、多页历史工作负载与独立分发包验证。覆盖原始 cell 来源、缩小再增长、仅溢出页更新、输出超限和错配清单。 [README](../README.md) · [CI](https://github.com/sssssurf/moonsqlite-inspect/actions/workflows/ci.yml) |
-| 许可与依赖来源 | 项目新增代码 Apache-2.0，上游同为 Apache-2.0，由 Mooncakes 安装。示例数据库由 SQLite 生成。 [项目许可](../LICENSE) · [上游许可](https://github.com/prowk/MoonSQLiteFile/blob/v0.8.1/LICENSE) |
-| 技术决策与 AI 辅助 | 代码、测试与文档使用 AI 辅助开发。页版本有效期、缩小后的页失效、二分选择页面和读事务保护采集顺序均有实现及对照检查。 [设计和边界](wal-timeline.md) · [SQLite 对照](../scripts/sqlite_oracle.py) |
-| Mooncakes 发布 | `sssssurf/moonsqlite-inspect@0.5.0` 已发布。独立工程从注册表安装后，JS、native、Wasm、Wasm GC 各通过七个公开 API 测试。注册表的 SHA-256 与实际上传的分发包一致。 [发布入口](https://mooncakes.io/docs/sssssurf/moonsqlite-inspect) |
+| 1. MoonBit 为主，`moonc` 至少 0.10.16 | 核心库和 CLI 用 MoonBit 实现。0.5.0 发布检查使用 0.10.22，CI 会在检查、构建和测试前核对编译器版本。 [发布检查](https://github.com/sssssurf/moonsqlite-inspect/actions/runs/45209808062) · [CI 配置](../.github/workflows/ci.yml) |
+| 2. 公开仓库与清晰提交 | 默认分支为公开的 `main`。历史记录涵盖历史视图、逐提交导出、采集清单、误报修复和历史点查与分页。 [公开仓库](https://github.com/sssssurf/moonsqlite-inspect) · [提交记录](https://github.com/sssssurf/moonsqlite-inspect/commits/main/) |
+| 3. 源代码结构与核心功能 | 历史页索引、行级差异和来源、连续提交比较分模块实现。CLI 通过库访问指定历史版本，Python 脚本负责生成受控采集和测试数据。 [页版本索引](../timeline.mbt) · [行读取与比较](../history_rows.mbt) · [连续比较](../series.mbt) · [设计和边界](wal-timeline.md) |
+| 4. README 与复现 | README 说明用途、包安装、库 API、CLI 命令、输入约定和复现步骤。 [README](../README.md) |
+| 5. CI 覆盖检查、构建和测试 | CI 对 JS、native、Wasm、Wasm GC 运行 `moon check`、`moon build` 和 `moon test`，并验证格式、SQLite 对照、分发包和 README 示例。 [CI 配置](../.github/workflows/ci.yml) · [运行记录](https://github.com/sssssurf/moonsqlite-inspect/actions/workflows/ci.yml) |
+| 6. 可运行示例 | `wal_demo.py` 生成基线、WAL 和清单。干净分发包执行 README 的 14 条命令并验证 10 份 JSON，包括历史点查、分页续传和版本差异。 [示例步骤](../README.md#reproduce-a-wal-history) · [复现检查](../scripts/verify_readme.py) |
+| 7. 核心路径测试 | 四后端各通过 9 项库测试和 7 项独立消费测试。SQLite 对照核验 6,012 条基础记录、100 个多页历史快照和 120 组差异，另覆盖损坏尾部、回滚、溢出、采集错配和输出限额。 [SQLite 对照](../scripts/sqlite_oracle.py) · [多页工作负载](../scripts/history_stress.py) |
+| 8. Mooncakes 发布 | `0.5.0` 已发布，独立工程从注册表安装后四个后端各通过 7 项接口测试，实际上传包的 SHA-256 与注册表一致。 [公开版本](https://mooncakes.io/docs/sssssurf/moonsqlite-inspect) · [安装验证](../scripts/verify_distribution.py) |
+| 9. OSI 许可证与上游来源 | 项目和 MoonSQLiteFile 0.8.1 均为 Apache-2.0。`moon.mod` 固定上游版本，通过其公开接口复用读取和 WAL 校验能力。 [OSI 许可条目](https://opensource.org/license/apache-2.0) · [项目许可](../LICENSE) · [上游许可](https://github.com/prowk/MoonSQLiteFile/blob/v0.8.1/LICENSE) |
+
+代码、测试与文档使用 AI 辅助开发。页版本有效期、缩小后的页失效、二分选择页面和读事务保护采集顺序均有实现及对照检查。 [设计和边界](wal-timeline.md)
 
 `0.5.0` 在 MoonBit 编译器 0.10.22、Node.js 24、SQLite 3.46.1 的线上环境通过完整 CI。四个后端各通过九项库测试和七项独立消费测试。SQLite 对照、多页历史工作负载和干净分发包示例均通过，README 的 14 条命令与 10 份 JSON 输出均得到验证。Windows 本地的 SQLite 3.45.3 也通过核心对照。 [发布源码](https://github.com/sssssurf/moonsqlite-inspect/tree/298ca2da4afca4d0ae21d7bf66b5dff24362cf77) · [代码 CI](https://github.com/sssssurf/moonsqlite-inspect/actions/runs/45209808062)
 

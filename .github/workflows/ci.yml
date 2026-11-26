@@ -14,9 +14,20 @@ jobs:
         run: |
           curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
           echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - name: Check MoonBit compiler version
+        run: |
+          python3 - <<'PY'
+          import re
+          import subprocess
+
+          report = subprocess.check_output(["moon", "version", "--all"], text=True)
+          print(report, end="")
+          compiler = re.search(r"(?m)^moonc[ \t]+v?(\d+)\.(\d+)\.(\d+)\b", report)
+          if compiler is None or tuple(map(int, compiler.groups())) < (0, 10, 16):
+              raise SystemExit("Acceptance requires moonc 0.10.16 or newer.")
+          PY
       - name: Verify library and SQLite fixtures
         run: |
-          moon version --all
           moon update
           for target in js native wasm wasm-gc; do
             moon check --target "$target" --deny-warn
