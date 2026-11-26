@@ -3,6 +3,7 @@
 ## 0.5.1
 
 - Use page membership tracking that compiles with warnings denied on MoonBit 1.0.0-rc1 and 0.10.21.
+- Validate the capture manifest nesting limit with the same public JSON parser options on both toolchains. Keep duplicate-key rejection and the eight-level limit.
 - Check the compiler version in CI against the November acceptance floor of 0.10.16 and map the nine requirements to repository evidence.
 
 ## 0.5.0

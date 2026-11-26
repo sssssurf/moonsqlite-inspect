@@ -45,6 +45,30 @@ fn verify_file_claim(
 }
 
 ///|
+fn manifest_depth_ok(value : Json, remaining : Int32) -> Bool {
+  match value {
+    Object(fields) => {
+      guard remaining > 0 else { return false }
+      for _, child in fields {
+        if !manifest_depth_ok(child, remaining - 1) {
+          return false
+        }
+      }
+    }
+    Array(items) => {
+      guard remaining > 0 else { return false }
+      for child in items {
+        if !manifest_depth_ok(child, remaining - 1) {
+          return false
+        }
+      }
+    }
+    _ => ()
+  }
+  true
+}
+
+///|
 fn verify_manifest(
   path : String,
   base : Bytes,
@@ -55,10 +79,14 @@ fn verify_manifest(
   }
   let parsed = @json.parse(
     @utf8.decode(contents[:]),
-    max_nesting_depth=8,
     reject_duplicate_keys=true,
   ) catch {
     _ => raise CliError("Invalid capture manifest JSON")
+  }
+  guard manifest_depth_ok(parsed, 8) else {
+    raise CliError(
+      "Invalid capture manifest JSON: nesting exceeds eight levels",
+    )
   }
   guard parsed is Object(fields) &&
     fields.get("format") is Some(String("moonsqlite-inspect.capture/1")) &&

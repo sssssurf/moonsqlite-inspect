@@ -634,6 +634,16 @@ def check_capture_manifest(directory):
     run("wal-verify", baseline, corrupt_wal, manifest, error="WAL size mismatch")
     invalid_manifest = directory / "duplicate-capture.json"
     original = manifest.read_text(encoding="utf-8")
+    nested = json.loads(original)
+    value = 'brackets in text: [[[[[[[[["'
+    for _ in range(7):
+        value = [value]
+    nested["example"] = value
+    invalid_manifest.write_text(json.dumps(nested), encoding="utf-8")
+    assert run("wal-verify", baseline, wal, invalid_manifest)["manifest_verified"]
+    nested["example"] = {"one_more": value}
+    invalid_manifest.write_text(json.dumps(nested), encoding="utf-8")
+    run("wal-verify", baseline, wal, invalid_manifest, error="nesting exceeds eight levels")
     invalid_manifest.write_text('{"format":"moonsqlite-inspect.capture/1",' + original[1:], encoding="utf-8")
     run("wal-verify", baseline, wal, invalid_manifest, error="Invalid capture manifest JSON")
     swapped_order = json.loads(original)
