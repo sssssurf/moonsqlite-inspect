@@ -1,12 +1,12 @@
 # MoonBit 十一月黑客松验收对照
 
-项目已通过报名初审。按参赛者于 2026-11-26 提供的验收指南，初审通过后持续开发并将成果上传 GitHub，验收前无需再填表。交付范围为 SQLite WAL 提交历史、行级差异和受控离线采集。 [十一月赛事页](https://moonbitlang.github.io/Hackathon2026/)
+项目已通过报名初审。按 2026 年 11 月 27 日收到的月度验收通知，初审通过后将开发成果上传 GitHub 即可，验收前无需再填表。组委会在 12 月第一周验收，以 11 月 30 日 23:59 的仓库快照为准。交付范围为 SQLite WAL 提交历史、行级差异和受控离线采集。 [十一月赛事页](https://moonbitlang.github.io/Hackathon2026/)
 
 ## 初审要求
 
 十一月官网将报名和资格审核列为两个阶段。报名需要公开仓库和一页项目说明，未通过可修改原表，审核滚动进行。章程第 4.1 节要求先查 Mooncakes，存在功能高度重合的成熟实现时优先考虑复用、维护、扩展或协作。仍采用独立项目时，申报书需解释具体缺口与独立实现理由。 [十一月赛事页](https://moonbitlang.github.io/Hackathon2026/#process) · [赛事章程](https://bxup9uklfcb.feishu.cn/wiki/Dx4Bwd6D1i3GfHkajQCcF7SznEd)
 
-章程第 5.1 节列出项目名称、介绍、方向与通用性、至少三个完整使用场景、核心范围、原创或参考方式、上游出处及许可证，以及公开 GitHub 仓库和至少十个有效提交。十一月官网的最终验收日期以官方通知为准。 [赛事章程](https://bxup9uklfcb.feishu.cn/wiki/Dx4Bwd6D1i3GfHkajQCcF7SznEd)
+章程第 5.1 节列出项目名称、介绍、方向与通用性、至少三个完整使用场景、核心范围、原创或参考方式、上游出处及许可证，以及公开 GitHub 仓库和至少十个有效提交。 [赛事章程](https://bxup9uklfcb.feishu.cn/wiki/Dx4Bwd6D1i3GfHkajQCcF7SznEd)
 
 ## 生态项目对照
 
@@ -26,7 +26,7 @@
 
 | 验收项 | 证据或状态 |
 | --- | --- |
-| 1. MoonBit 为主，`moonc` 至少 0.10.16 | 核心库和 CLI 用 MoonBit 实现。0.5.1 发布检查使用 1.0.0-rc1，CI 在检查、构建和测试前核对编译器版本。 [发布检查](https://github.com/sssssurf/moonsqlite-inspect/actions/runs/45821395923) · [CI 配置](../.github/workflows/ci.yml) |
+| 1. MoonBit 为主，`moonc` 至少 1.0.0-rc1 | 核心库和 CLI 用 MoonBit 实现。0.5.1 发布检查使用 1.0.0-rc1，CI 在检查、构建和测试前核对本期最低版本。 [发布检查](https://github.com/sssssurf/moonsqlite-inspect/actions/runs/45821395923) · [CI 配置](../.github/workflows/ci.yml) |
 | 2. 公开仓库与清晰提交 | 默认分支为公开的 `main`。历史记录涵盖历史视图、逐提交导出、采集清单、误报修复和历史点查与分页。 [公开仓库](https://github.com/sssssurf/moonsqlite-inspect) · [提交记录](https://github.com/sssssurf/moonsqlite-inspect/commits/main/) |
 | 3. 源代码结构与核心功能 | 历史页索引、行级差异和来源、连续提交比较分模块实现。CLI 通过库访问指定历史版本，Python 脚本负责生成受控采集和测试数据。 [页版本索引](../timeline.mbt) · [行读取与比较](../history_rows.mbt) · [连续比较](../series.mbt) · [设计和边界](wal-timeline.md) |
 | 4. README 与复现 | README 说明用途、包安装、库 API、CLI 命令、输入约定和复现步骤。 [README](../README.md) |
@@ -42,7 +42,10 @@
 
 ### 重现验收检查
 
+使用 `moonc` 1.0.0-rc1 或更高版本。
+
 ```sh
+moon version --all
 moon update
 for target in js native wasm wasm-gc; do
   moon check --target "$target" --deny-warn

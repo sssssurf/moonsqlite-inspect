@@ -22,9 +22,22 @@ jobs:
 
           report = subprocess.check_output(["moon", "version", "--all"], text=True)
           print(report, end="")
-          compiler = re.search(r"(?m)^moonc[ \t]+v?(\d+)\.(\d+)\.(\d+)\b", report)
-          if compiler is None or tuple(map(int, compiler.groups())) < (0, 10, 16):
-              raise SystemExit("Acceptance requires moonc 0.10.16 or newer.")
+          compiler = re.search(
+              r"(?m)^moonc[ \t]+v?(\d+)\.(\d+)\.(\d+)"
+              r"(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?(?=\s|$)",
+              report,
+          )
+          if compiler is None:
+              raise SystemExit("Could not identify moonc in 'moon version --all'.")
+          version = tuple(map(int, compiler.groups()[:3]))
+          prerelease = compiler[4]
+          # At 1.0.0, the leading prerelease identifier determines its order relative to rc1.
+          if version < (1, 0, 0) or (
+              version == (1, 0, 0)
+              and prerelease is not None
+              and prerelease.split(".", 1)[0] < "rc1"
+          ):
+              raise SystemExit("Acceptance requires moonc 1.0.0-rc1 or newer.")
           PY
       - name: Verify library and SQLite fixtures
         run: |
