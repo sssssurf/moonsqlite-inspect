@@ -307,10 +307,13 @@ def verify(registry, version):
         samples = workspace / "samples"
         consumer.mkdir()
         make_capture(samples)
-        (consumer / "moon.mod").write_text(
-            f'name = "{CONSUMER}"\nversion = "0.1.0"\nimport {{\n  "{module}@{version}",\n}}\n',
-            encoding="utf-8",
-        )
+        dependency = f"{module}@{version}"
+        consumer_manifest = f'name = "{CONSUMER}"\nversion = "0.1.0"\n'
+        if not registry:
+            consumer_manifest += f'import {{\n  "{dependency}",\n}}\n'
+        (consumer / "moon.mod").write_text(consumer_manifest, encoding="utf-8")
+        if registry:
+            subprocess.run([moon, "add", "--no-update", dependency], cwd=consumer, check=True)
         (consumer / "moon.pkg").write_text(
             f'import {{\n  "{module}" @inspect,\n}} for "test"\n', encoding="utf-8",
         )

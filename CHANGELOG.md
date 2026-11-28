@@ -1,5 +1,10 @@
 # Changes
 
+## 0.5.2
+
+- Publish the README with the current November compiler floor of MoonBit 1.0.0-rc1.
+- Check registry installation through `moon add` and support replaying the README example from the downloaded release archive.
+
 ## 0.5.1
 
 - Use page membership tracking that compiles with warnings denied on MoonBit 1.0.0-rc1 and 0.10.21.

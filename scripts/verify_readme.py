@@ -17,15 +17,17 @@ from verify_distribution import manifest_field
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def verify(skip_update=False):
+def verify(skip_update=False, archive=None):
     moon = shutil.which("moon")
     if moon is None:
         raise RuntimeError("install MoonBit and put moon on PATH")
-    subprocess.run([moon, "package", "--frozen"], cwd=ROOT, check=True)
-    module = manifest_field(ROOT / "moon.mod", "name")
-    version = manifest_field(ROOT / "moon.mod", "version")
     build = (ROOT / "_build").resolve()
-    archive = build / "publish" / f"{module.replace('/', '-')}-{version}.zip"
+    build.mkdir(exist_ok=True)
+    if archive is None:
+        subprocess.run([moon, "package", "--frozen"], cwd=ROOT, check=True)
+        module = manifest_field(ROOT / "moon.mod", "name")
+        version = manifest_field(ROOT / "moon.mod", "version")
+        archive = build / "publish" / f"{module.replace('/', '-')}-{version}.zip"
     with tempfile.TemporaryDirectory(prefix="readme-check-", dir=build) as temporary:
         workspace = Path(temporary).resolve()
         assert workspace.parent == build
@@ -92,5 +94,6 @@ def verify(skip_update=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-update", action="store_true", help="Use a registry index already present in MOON_HOME")
+    parser.add_argument("--archive", type=Path, help="Use a downloaded release ZIP")
     options = parser.parse_args()
-    verify(options.skip_update)
+    verify(options.skip_update, options.archive)
